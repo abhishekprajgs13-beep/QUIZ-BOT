@@ -169,8 +169,7 @@ async def _run_quiz_loop(c: Client, chat_id: int, session: dict) -> None:
     else:
         lb_text += "No participants answered in time."
 
-    kb = mini_app_web_app_button(btn_text="Play in Web App 🎮") if config.MINI_APP_DOMAIN else None
-    await c.send_message(chat_id, lb_text, reply_markup=kb)
+    await c.send_message(chat_id, lb_text)
 
 
 async def poll_answer_cb(c: Client, pa: PollAnswer) -> None:

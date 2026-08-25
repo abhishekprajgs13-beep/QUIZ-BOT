@@ -151,8 +151,6 @@ async def start_cmd(c: Client, m: Message) -> None:
         )
         return
 
-    from quizbot.shared.mini_app_link import mini_app_web_app_button
-
     welcome_text = (
         "🎯 **Welcome to Quiz Bot!**\n\n"
         "I am your all-in-one Telegram Quiz Assistant. You can create, edit, and play interactive quizzes!\n\n"
@@ -163,10 +161,12 @@ async def start_cmd(c: Client, m: Message) -> None:
         "• `/edit <qid>` — Edit an existing quiz\n"
         "• `/whtml <qid>` — Generate interactive HTML report\n\n"
         "🎮 **Play Quizzes:**\n"
-        "Click the **Play Quiz 🎮** button below to launch the WebApp Quiz Player!\n\n"
+        "• `/quiz <qid>` — Launch interactive quiz in group or chat\n"
+        "• `/stop` — Stop current running quiz\n"
+        "• `/leaderboard <qid>` — View quiz leaderboard\n\n"
         "❓ Send `/help` for full command reference."
     )
-    await m.reply(welcome_text, reply_markup=mini_app_web_app_button(btn_text="Play Quiz 🎮"))
+    await m.reply(welcome_text)
     return
 
 
