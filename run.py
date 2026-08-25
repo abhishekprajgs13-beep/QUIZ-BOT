@@ -62,23 +62,11 @@ async def main(only: str | None) -> None:
     await init_db(config.MONGODB_URI, config.MONGODB_DB_NAME)
     logger.info("Database ready.")
 
-    is_single_token = (
-        config.CREATOR_BOT_TOKEN
-        and config.RUNNER_BOT_TOKEN
-        and config.CREATOR_BOT_TOKEN == config.RUNNER_BOT_TOKEN
-    )
-
     tasks: list[asyncio.Task] = []
-    if only == "creator" or is_single_token:
-        logger.info("Single Bot Token mode detected. Running Creator Bot Engine...")
+    if only in (None, "creator"):
         tasks.append(asyncio.create_task(_run_creator_bot(), name="creator_bot"))
-    else:
-        if only in (None, "creator"):
-            tasks.append(asyncio.create_task(_run_creator_bot(), name="creator_bot"))
-        if only in (None, "runner"):
-            tasks.append(asyncio.create_task(_run_runner_bot(), name="runner_bot"))
-
-    # Always launch Mini App HTTP server so Render port scan passes immediately
+    if (only in (None, "runner")) and (config.CREATOR_BOT_TOKEN != config.RUNNER_BOT_TOKEN):
+        tasks.append(asyncio.create_task(_run_runner_bot(), name="runner_bot"))
     tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
 
     stop_event = asyncio.Event()

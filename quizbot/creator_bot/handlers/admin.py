@@ -160,10 +160,6 @@ async def start_cmd(c: Client, m: Message) -> None:
         "• `/list` — List all your quizzes\n"
         "• `/edit <qid>` — Edit an existing quiz\n"
         "• `/whtml <qid>` — Generate interactive HTML report\n\n"
-        "🎮 **Play Quizzes:**\n"
-        "• `/quiz <qid>` — Launch interactive quiz in group or chat\n"
-        "• `/stop` — Stop current running quiz\n"
-        "• `/leaderboard <qid>` — View quiz leaderboard\n\n"
         "❓ Send `/help` for full command reference."
     )
     await m.reply(welcome_text)

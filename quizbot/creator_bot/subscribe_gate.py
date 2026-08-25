@@ -29,38 +29,24 @@ async def subscribe_gate(app: Client, m: Message) -> bool:
         if await subscribe_gate(app, m):
             return
     """
-    if not m.from_user:
-        return False
-
-    # 1. Check if user is banned in LOG_GROUP
-    if config.LOG_GROUP:
+    channel = config.REQUIRED_SUB_CHANNEL
+    if channel:
         try:
-            member = await app.get_chat_member(config.LOG_GROUP, m.from_user.id)
-            if str(member.status) in ("ChatMemberStatus.BANNED", "banned"):
-                await m.reply_text("\U0001F6AB Banned")
-                return True
-        except Exception:
-            pass
-
-    # 2. Check required sub channel membership
-    if config.REQUIRED_SUB_CHANNEL:
-        channel_username = config.REQUIRED_SUB_CHANNEL.strip()
-        clean_username = channel_username.lstrip("@")
-        try:
-            member = await app.get_chat_member(channel_username if channel_username.startswith("@") else f"@{channel_username}", m.from_user.id)
-            if str(member.status) in ("ChatMemberStatus.BANNED", "banned"):
-                await m.reply_text("\U0001F6AB Banned")
+            clean_ch = channel.lstrip("@")
+            member = await app.get_chat_member(channel, m.from_user.id)
+            if str(member.status) in ("ChatMemberStatus.BANNED", "banned", "kicked"):
+                await m.reply_text("🚫 Banned from channel.")
                 return True
         except UserNotParticipant:
+            clean_ch = channel.lstrip("@")
             await m.reply_photo(
                 _JOIN_PROMPT_PHOTO,
-                caption="\U0001F4E2 Please join our channel to continue.",
+                caption="📢 Please join our channel to continue using the bot.",
                 reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("\U0001F517 Join Channel", url=f"https://t.me/{clean_username}")]]
+                    [[InlineKeyboardButton("🔗 Join Channel", url=f"https://t.me/{clean_ch}")]]
                 ),
             )
             return True
         except Exception as exc:
-            logger.debug("subscribe_gate channel check failed (allowing through): %s", exc)
-
+            logger.debug("subscribe_gate check failed (allowing through): %s", exc)
     return False
