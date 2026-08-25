@@ -216,6 +216,21 @@ async def _finalize_quiz(
         await send_result("⚠️ Quiz created but could not be re-fetched. Try /myquizzes.")
         return
 
+    if config.LOG_GROUP:
+        try:
+            log_text = (
+                f"📝 **New Quiz Created!**\n\n"
+                f"• **Quiz Name:** {quiz_name}\n"
+                f"• **Quiz ID:** `{qid}`\n"
+                f"• **Total Questions:** {len(questions)}\n"
+                f"• **Quiz Type:** `{quiz_type}`\n"
+                f"• **Creator Name:** {from_user_name}\n"
+                f"• **Creator User ID:** `{uid}`"
+            )
+            await c.send_message(chat_id=config.LOG_GROUP, text=log_text)
+        except Exception as exc:
+            logger.debug("Failed to send quiz creation notification to LOG_GROUP: %s", exc)
+
     promo_flag = "Set" if promo else "None"
     text = (
         f"> 🎉 **Quiz Created!**\n\n"
