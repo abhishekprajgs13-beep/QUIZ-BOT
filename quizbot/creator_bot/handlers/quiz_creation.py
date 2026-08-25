@@ -61,9 +61,9 @@ _RESERVED_COMMANDS = [
     "leaders", "aspirants", "limit", "listquiz", "removeuser",
 ]
 
-MIN_QUESTIONS = 10
-MAX_QUESTIONS = 300
-MAX_QUESTIONS_OWNER = 3000
+MIN_QUESTIONS = 1
+MAX_QUESTIONS = 100000
+MAX_QUESTIONS_OWNER = 100000
 
 
 def _gen_qid() -> str:
