@@ -704,3 +704,7 @@ def generate_quiz_report_html(quiz: dict, attempts: list[dict] | None = None) ->
 
     filename = f"{qid}_report.html"
     return doc.encode("utf-8"), filename
+
+
+render_quiz_html = generate_quiz_report_html
+render_analysis_html = generate_quiz_report_html
