@@ -78,10 +78,8 @@ async def main(only: str | None) -> None:
         if only in (None, "runner"):
             tasks.append(asyncio.create_task(_run_runner_bot(), name="runner_bot"))
 
-    if only == "miniapp":
-        tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
-    elif only is None and config.MINI_APP_DOMAIN:
-        tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
+    # Always launch Mini App HTTP server so Render port scan passes immediately
+    tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
 
     stop_event = asyncio.Event()
 
