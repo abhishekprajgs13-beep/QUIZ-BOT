@@ -151,8 +151,22 @@ async def start_cmd(c: Client, m: Message) -> None:
         )
         return
 
-    # Bare /start, no payment payload -- intentionally silent. The Runner
-    # Bot's /start owns the welcome message for this deployment.
+    from quizbot.shared.mini_app_link import mini_app_web_app_button
+
+    welcome_text = (
+        "🎯 **Welcome to Quiz Bot!**\n\n"
+        "I am your all-in-one Telegram Quiz Assistant. You can create, edit, and play interactive quizzes!\n\n"
+        "📝 **Quiz Creation Commands:**\n"
+        "• `/create` — Create a new quiz\n"
+        "• `/done` — Finish and save current quiz\n"
+        "• `/list` — List all your quizzes\n"
+        "• `/edit <qid>` — Edit an existing quiz\n"
+        "• `/whtml <qid>` — Generate interactive HTML report\n\n"
+        "🎮 **Play Quizzes:**\n"
+        "Click the **Play Quiz 🎮** button below to launch the WebApp Quiz Player!\n\n"
+        "❓ Send `/help` for full command reference."
+    )
+    await m.reply(welcome_text, reply_markup=mini_app_web_app_button(btn_text="Play Quiz 🎮"))
     return
 
 
