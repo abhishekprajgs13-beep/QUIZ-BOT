@@ -50,6 +50,20 @@ async def _run_mini_app() -> None:
     await run_mini_app_server()
 
 
+async def _keep_alive_heartbeat() -> None:
+    """Self-ping HTTP healthz every 4 minutes to keep Render Free instance active 24/7."""
+    import httpx
+    while True:
+        try:
+            await asyncio.sleep(240)
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.get("http://127.0.0.1:8080/healthz")
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
 async def main(only: str | None) -> None:
     problems = config.validate(bot=only or "both")
     if problems:
@@ -68,6 +82,7 @@ async def main(only: str | None) -> None:
     if (only in (None, "runner")) and (config.CREATOR_BOT_TOKEN != config.RUNNER_BOT_TOKEN):
         tasks.append(asyncio.create_task(_run_runner_bot(), name="runner_bot"))
     tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
+    tasks.append(asyncio.create_task(_keep_alive_heartbeat(), name="keep_alive"))
 
     stop_event = asyncio.Event()
 

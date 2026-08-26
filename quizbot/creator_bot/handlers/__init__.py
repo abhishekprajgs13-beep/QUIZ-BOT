@@ -19,6 +19,7 @@ from . import (
     payments,
     quiz_creation,
     quiz_editing,
+    quiz_execution,
     quiz_management,
     reports,
     settings,
@@ -39,4 +40,5 @@ def register(app: Client) -> None:
     reports.register(app)
     quiz_editing.register(app)
     quiz_creation.register(app)
+    quiz_execution.register(app)
     inline.register(app)

@@ -151,6 +151,11 @@ async def start_cmd(c: Client, m: Message) -> None:
         )
         return
 
+    if param:
+        from .quiz_execution import handle_start_quiz_param
+        if await handle_start_quiz_param(c, m, param):
+            return
+
     welcome_text = (
         "🎯 **Welcome to Quiz Bot!**\n\n"
         "I am your all-in-one Telegram Quiz Assistant. You can create, edit, and play interactive quizzes!\n\n"
