@@ -261,5 +261,6 @@ async def testseries_cmd(c: Client, m: Message) -> None:
 
 
 def register(app: Client) -> None:
-    app.on_message(filters.command("whtml") & filters.private)(whtml_cmd)
+    # Disabled to prevent Render OOM crashes
+    # app.on_message(filters.command("whtml") & filters.private)(whtml_cmd)
     app.on_message(filters.command(["testseries", "tsr", "mocktest"]) & filters.private)(testseries_cmd)
