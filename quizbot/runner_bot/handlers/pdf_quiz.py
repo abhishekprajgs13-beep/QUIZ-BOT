@@ -443,6 +443,8 @@ async def _pdfquiz_generate_flow(uid: int, ctx: ContextTypes.DEFAULT_TYPE, msg: 
 
 
 def register(application: Application) -> None:
-    application.add_handler(CommandHandler("pdfquiz", pdfquiz_command))
-    application.add_handler(CallbackQueryHandler(pdfquiz_callback, pattern="^pdfq_"))
+    # Disabled to prevent Render OOM crashes
+    # application.add_handler(CommandHandler("pdfquiz", pdfquiz_command))
+    # application.add_handler(MessageHandler(filters.Document.PDF, pdf_document_handler))
+    # application.add_handler(CallbackQueryHandler(pdfquiz_callback, pattern="^pdfq_"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, pdfquiz_text_gate))
