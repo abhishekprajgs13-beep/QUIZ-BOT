@@ -29,6 +29,10 @@ async def subscribe_gate(app: Client, m: Message) -> bool:
         if await subscribe_gate(app, m):
             return
     """
+    from pyrogram.enums import ChatType
+    if m.chat and m.chat.type != ChatType.PRIVATE:
+        return False
+
     channel = config.REQUIRED_SUB_CHANNEL
     if channel:
         try:

@@ -37,6 +37,11 @@ async def handle_start_quiz_param(c: Client, m: Message, qid: str) -> bool:
 
     quiz_repo = QuizRepository(get_db())
     quiz = await quiz_repo.get(clean_qid)
+    if not quiz:
+        import re
+        from quizbot.database.repositories import _clean
+        row = await quiz_repo.col.find_one({"qid": {"$regex": f"^{re.escape(clean_qid)}$", "$options": "i"}})
+        quiz = _clean(row)
     
     if not quiz:
         return False
@@ -85,6 +90,12 @@ async def start_polls_callback(c: Client, cb: CallbackQuery) -> None:
     quiz_repo = QuizRepository(get_db())
     quiz = await quiz_repo.get(qid)
     if not quiz:
+        import re
+        from quizbot.database.repositories import _clean
+        row = await quiz_repo.col.find_one({"qid": {"$regex": f"^{re.escape(qid)}$", "$options": "i"}})
+        quiz = _clean(row)
+
+    if not quiz:
         await cb.answer("❌ Quiz not found!", show_alert=True)
         return
 
@@ -117,6 +128,11 @@ async def quiz_cmd(c: Client, m: Message) -> None:
     qid = parts[1].strip()
     quiz_repo = QuizRepository(get_db())
     quiz = await quiz_repo.get(qid)
+    if not quiz:
+        import re
+        from quizbot.database.repositories import _clean
+        row = await quiz_repo.col.find_one({"qid": {"$regex": f"^{re.escape(qid)}$", "$options": "i"}})
+        quiz = _clean(row)
     
     if not quiz:
         await m.reply("❌ **Quiz not found!** Check the Quiz ID and try again.")
