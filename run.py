@@ -79,7 +79,7 @@ async def main(only: str | None) -> None:
     tasks: list[asyncio.Task] = []
     if only in (None, "creator"):
         tasks.append(asyncio.create_task(_run_creator_bot(), name="creator_bot"))
-    if (only in (None, "runner")) and (config.CREATOR_BOT_TOKEN != config.RUNNER_BOT_TOKEN):
+    if only in (None, "runner"):
         tasks.append(asyncio.create_task(_run_runner_bot(), name="runner_bot"))
     tasks.append(asyncio.create_task(_run_mini_app(), name="mini_app"))
     tasks.append(asyncio.create_task(_keep_alive_heartbeat(), name="keep_alive"))
