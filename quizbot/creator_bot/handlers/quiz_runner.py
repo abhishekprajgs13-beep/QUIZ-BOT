@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 from pyrogram import Client, filters
 from pyrogram.enums import PollType
-from pyrogram.types import Message, PollAnswer
+from pyrogram.types import Message
 
 from quizbot.database import QuizRepository, LeaderboardRepository, get_db
 
@@ -165,7 +165,7 @@ async def _run_quiz_loop(c: Client, chat_id: int, session: dict) -> None:
     await c.send_message(chat_id, lb_text)
 
 
-async def poll_answer_cb(c: Client, pa: PollAnswer) -> None:
+async def poll_answer_cb(c: Client, pa: Any) -> None:
     poll_id = pa.poll_id
     poll_meta = active_polls.get(poll_id)
     if not poll_meta:
