@@ -254,9 +254,52 @@ async def leaderboard_cmd(c: Client, m: Message) -> None:
     await m.reply(text)
 
 
+from pyrogram.handlers import RawUpdateHandler
+from pyrogram.raw.types import UpdateBotPollVote
+
+
+async def raw_poll_vote_cb(client: Client, update: Any, users: dict, chats: dict) -> None:
+    if isinstance(update, UpdateBotPollVote):
+        poll_id = str(update.poll_id)
+        poll_meta = active_polls.get(poll_id)
+        if not poll_meta:
+            return
+        chat_id = poll_meta["chat_id"]
+        session = active_quiz_sessions.get(chat_id)
+        if not session:
+            return
+        user_id = update.user_id
+        user_obj = users.get(user_id)
+        name = user_obj.first_name if user_obj and hasattr(user_obj, "first_name") and user_obj.first_name else str(user_id)
+        selected_option = update.options[0] if update.options else None
+        correct_option = poll_meta["correct_id"]
+
+        if user_id not in session["scores"]:
+            session["scores"][user_id] = {"name": name, "correct": 0}
+
+        if selected_option == correct_option:
+            session["scores"][user_id]["correct"] += 1
+            lb_repo = LeaderboardRepository(get_db())
+            try:
+                await lb_repo.col.update_one(
+                    {"qid": session["qid"], "user_id": user_id},
+                    {
+                        "$set": {
+                            "user_name": name,
+                            "username": name,
+                            "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                        "$inc": {"score": 1, "total_questions": 1},
+                    },
+                    upsert=True,
+                )
+            except Exception:
+                pass
+
+
 def register(app: Client) -> None:
     app.on_message(filters.command(["quiz", "quiz@bot"]))(quiz_cmd)
     app.on_message(filters.command("stop"))(stop_cmd)
     app.on_message(filters.command("skip"))(skip_cmd)
     app.on_message(filters.command(["leaderboard", "leaders"]))(leaderboard_cmd)
-    app.on_poll_answer()(poll_answer_cb)
+    app.add_handler(RawUpdateHandler(raw_poll_vote_cb))
