@@ -255,11 +255,10 @@ async def leaderboard_cmd(c: Client, m: Message) -> None:
 
 
 from pyrogram.handlers import RawUpdateHandler
-from pyrogram.raw.types import UpdateBotPollVote
 
 
 async def raw_poll_vote_cb(client: Client, update: Any, users: dict, chats: dict) -> None:
-    if isinstance(update, UpdateBotPollVote):
+    if update.__class__.__name__ == "UpdateBotPollVote":
         poll_id = str(update.poll_id)
         poll_meta = active_polls.get(poll_id)
         if not poll_meta:
