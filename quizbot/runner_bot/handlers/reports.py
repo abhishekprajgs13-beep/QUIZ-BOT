@@ -103,6 +103,8 @@ async def compare_results(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def register(application: Application) -> None:
-    application.add_handler(CommandHandler("html", html_command))
-    application.add_handler(CommandHandler("pdf", pdf_command))
+    # Disabled to prevent Render OOM crashes
+    # application.add_handler(CommandHandler("html", html_command))
+    # application.add_handler(CommandHandler("pdf", pdf_command))
+    pass
     application.add_handler(CallbackQueryHandler(compare_results, pattern="^compare_"))
