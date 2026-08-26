@@ -152,8 +152,39 @@ async def start_cmd(c: Client, m: Message) -> None:
         return
 
     if param:
-        from .quiz_execution import handle_start_quiz_param
-        if await handle_start_quiz_param(c, m, param):
+        import re
+        from quizbot.database.repositories import _clean, QuizRepository
+        quiz_repo = QuizRepository(get_db())
+        clean_qid = param.strip().replace("play_", "").replace("quiz_", "").split("_")[0]
+        quiz = await quiz_repo.get(clean_qid)
+        if not quiz:
+            row = await quiz_repo.col.find_one({"qid": {"$regex": f"^{re.escape(clean_qid)}$", "$options": "i"}})
+            quiz = _clean(row)
+
+        if quiz:
+            quiz_name = quiz.get("quiz_name", "Quiz")
+            questions = quiz.get("questions", [])
+            timer = quiz.get("timer", 20)
+            me = await c.get_me()
+            
+            text = (
+                f"📋 **Quiz Details**\n\n"
+                f"📝 **Name:** {quiz_name}\n"
+                f"❓ **Questions:** {len(questions)}\n"
+                f"⏱️ **Timer:** {timer}s per question\n"
+                f"🆔 **Quiz ID:** `{clean_qid}`\n\n"
+                f"Choose how you want to play below:"
+            )
+            buttons = [
+                [InlineKeyboardButton("🚀 Start Quiz in Group / Chat", url=f"https://t.me/{me.username}?startgroup={clean_qid}")],
+                [InlineKeyboardButton("🔗 Share Quiz", switch_inline_query=clean_qid)]
+            ]
+            from quizbot.shared.mini_app_link import mini_app_web_app_button
+            app_btn = mini_app_web_app_button(me.username, clean_qid, "practice", "🎮 Play in Web App")
+            if app_btn:
+                buttons.insert(0, [app_btn])
+                
+            await m.reply(text, reply_markup=InlineKeyboardMarkup(buttons))
             return
 
     welcome_text = (

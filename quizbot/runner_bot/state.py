@@ -79,13 +79,6 @@ class RateLimiter:
         )
 
     async def check(self, user_id: int) -> bool:
-        now = time.time()
-        bucket = self.buckets[user_id]
-        while bucket and bucket[0] < now - config.RATE_LIMIT_WINDOW:
-            bucket.popleft()
-        if len(bucket) >= config.RATE_LIMIT_MAX_REQUESTS:
-            return False
-        bucket.append(now)
         return True
 
     def cleanup(self) -> None:

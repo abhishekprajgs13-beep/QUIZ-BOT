@@ -1,161 +1,883 @@
 """
 Advance Quiz Bot — Open Source Project
-Interactive HTML Quiz Report Generator based on erfrfer template.
+This project was originally developed by Gagan (github.com/devgaganin).
+Reference: https://t.me/advance_quiz_bot
+The codebase has been reviewed and verified with the assistance of Claude AI.
 """
 
 from __future__ import annotations
-import json
+
 import html
+import json
+import random
 import re
+import uuid
 from typing import Any
 
-def _esc(val: Any) -> str:
-    if val is None:
-        return ""
-    return html.escape(str(val), quote=True)
+# --------------------------------------------------------------------------
+# Small local helpers (no external deps -- stdlib only)
+# --------------------------------------------------------------------------
 
-TEMPLATE = """<!DOCTYPE html>
+
+def _esc(value: Any) -> str:
+    """Escape arbitrary input for safe interpolation into HTML text nodes."""
+    if value is None:
+        return ""
+    return html.escape(str(value), quote=True)
+
+
+def _slug(text: str, fallback: str = "quiz") -> str:
+    """Turn a quiz name into a filesystem-safe filename stem."""
+    text = (text or "").strip().lower()
+    cleaned = "".join(ch if ch.isalnum() else "-" for ch in text)
+    cleaned = "-".join(part for part in cleaned.split("-") if part)
+    return cleaned[:60] or fallback
+
+
+def _js_literal(value: Any) -> str:
+    """Serialize a Python value to a JSON literal safe for embedding in a
+    <script> block (also neutralizes '</script>' breakout sequences)."""
+    raw = json.dumps(value, ensure_ascii=False)
+    return raw.replace("</", "<\\/")
+
+
+# --------------------------------------------------------------------------
+# Shared design system: CSS variables, base layout, dark-mode toggle.
+# Both report types import this so the two documents look like one family.
+# --------------------------------------------------------------------------
+
+_GOOGLE_FONTS_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;'
+    '600;700;800&display=swap" rel="stylesheet">'
+)
+
+_FONT_AWESOME_LINK = (
+    '<link rel="stylesheet" '
+    'href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/'
+    'all.min.css" '
+    'integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" '
+    'crossorigin="anonymous" referrerpolicy="no-referrer">'
+)
+
+_CHARTJS_SCRIPT = (
+    '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/'
+    'chart.umd.min.js" '
+    'integrity="sha512-CMF3tQtjOoOJoOKlsS7/2loJlkyctwzSoDK/S40iAB+MqRHFsfKl6dZWRSuwpVXcy77gjPFVmDzoTfjWLmOJvA==" '
+    'crossorigin="anonymous" referrerpolicy="no-referrer"></script>'
+)
+
+# Core design tokens + resets shared by both page types.
+_BASE_CSS = """
+:root {
+  --color-bg: #f4f6fb;
+  --color-surface: #ffffff;
+  --color-surface-alt: #eef1f8;
+  --color-border: #dde2ee;
+  --color-text: #1c2333;
+  --color-text-muted: #5b6478;
+  --color-primary: #4f46e5;
+  --color-primary-dark: #4338ca;
+  --color-primary-soft: #eef0fe;
+  --color-success: #16a34a;
+  --color-success-soft: #e8f8ee;
+  --color-danger: #dc2626;
+  --color-danger-soft: #fdecec;
+  --color-warning: #d97706;
+  --color-warning-soft: #fef3e2;
+  --color-accent: #0ea5e9;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 20px 45px rgba(15, 23, 42, 0.14);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+html[data-theme="dark"] {
+  --color-bg: #0f1320;
+  --color-surface: #161b2c;
+  --color-surface-alt: #1e2438;
+  --color-border: #2a3149;
+  --color-text: #e7e9f5;
+  --color-text-muted: #9aa2bd;
+  --color-primary: #818cf8;
+  --color-primary-dark: #6366f1;
+  --color-primary-soft: #232a49;
+  --color-success: #34d399;
+  --color-success-soft: #103524;
+  --color-danger: #f87171;
+  --color-danger-soft: #3a1620;
+  --color-warning: #fbbf24;
+  --color-warning-soft: #3a2b0c;
+  --color-accent: #38bdf8;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 20px 45px rgba(0, 0, 0, 0.55);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+body { min-height: 100vh; }
+
+a { color: inherit; }
+
+.container {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 clamp(12px, 3vw, 28px);
+}
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 18px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+  user-select: none;
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary { background: var(--color-primary); color: #fff; }
+.btn-primary:hover:not(:disabled) { background: var(--color-primary-dark); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+.btn-outline:hover:not(:disabled) { background: var(--color-surface-alt); }
+
+.btn-ghost {
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--color-border); }
+
+.btn-danger { background: var(--color-danger); color: #fff; }
+.btn-success { background: var(--color-success); color: #fff; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: var(--shadow-sm);
+}
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px clamp(12px, 3vw, 28px);
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+}
+.brand i { color: var(--color-primary); }
+
+.theme-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  flex: 0 0 auto;
+}
+.theme-toggle:hover { background: var(--color-border); }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 10px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.badge-primary { background: var(--color-primary-soft); color: var(--color-primary); }
+.badge-success { background: var(--color-success-soft); color: var(--color-success); }
+.badge-danger  { background: var(--color-danger-soft);  color: var(--color-danger); }
+.badge-warning { background: var(--color-warning-soft); color: var(--color-warning); }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+footer.site-footer {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  padding: 28px 12px 40px;
+}
+"""
+
+# JS shared by both page types: theme persistence + toggle wiring.
+_THEME_JS = """
+(function () {
+  var root = document.documentElement;
+  var stored = null;
+  try { stored = localStorage.getItem('quiz-theme'); } catch (e) {}
+  if (stored === 'dark') { root.setAttribute('data-theme', 'dark'); }
+
+  function applyIcon() {
+    var btn = document.getElementById('themeToggleBtn');
+    if (!btn) return;
+    var isDark = root.getAttribute('data-theme') === 'dark';
+    btn.innerHTML = isDark
+      ? '<i class="fa-solid fa-sun"></i>'
+      : '<i class="fa-solid fa-moon"></i>';
+    btn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+  }
+
+  window.addEventListener('DOMContentLoaded', function () {
+    applyIcon();
+    var btn = document.getElementById('themeToggleBtn');
+    if (btn) {
+      btn.addEventListener('click', function () {
+        var isDark = root.getAttribute('data-theme') === 'dark';
+        if (isDark) {
+          root.removeAttribute('data-theme');
+          try { localStorage.setItem('quiz-theme', 'light'); } catch (e) {}
+        } else {
+          root.setAttribute('data-theme', 'dark');
+          try { localStorage.setItem('quiz-theme', 'dark'); } catch (e) {}
+        }
+        applyIcon();
+      });
+    }
+  });
+})();
+"""
+
+
+def _topbar_html(title: str, subtitle: str = "") -> str:
+    """Sticky header shared by both report types."""
+    sub = f'<div class="topbar-sub">{_esc(subtitle)}</div>' if subtitle else ""
+    return f"""
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <i class="fa-solid fa-layer-group"></i>
+      <span>{_esc(title)}</span>
+    </div>
+    <button id="themeToggleBtn" class="theme-toggle" type="button"
+      aria-label="Toggle dark mode">
+      <i class="fa-solid fa-moon"></i>
+    </button>
+  </div>
+  {sub}
+</div>
+"""
+
+
+def _page_shell(*, title: str, extra_head: str, body: str, extra_scripts: str) -> str:
+    """Wrap CSS/body/JS fragments into one complete HTML document."""
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>erfrfer</title>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<style>
-*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-:root{--primary:#667eea;--primary-dark:#5568d3;--secondary:#764ba2;--success:#48bb78;--danger:#f5576c;--warning:#fbbf24;--info:#4facfe;--bg-light:#f7fafc;--bg-white:#fff;--text-dark:#1a202c;--text-light:#718096;--border:#e2e8f0}
-[data-theme="dark"]{--bg-light:#1a202c;--bg-white:#2d3748;--text-dark:#f7fafc;--text-light:#cbd5e0;--border:#4a5568}
-body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);min-height:100vh;overflow:hidden;user-select:none;-webkit-user-select:none;transition:background .3s}
-.scrollable::-webkit-scrollbar{width:6px}
-.scrollable::-webkit-scrollbar-track{background:transparent}
-.scrollable::-webkit-scrollbar-thumb{background:var(--primary);border-radius:10px}
-.protected-content{white-space:pre-wrap;word-wrap:break-word;word-break:break-word;line-height:1.6;user-select:none}
-#modeSelection{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;overflow-y:auto}
-.mode-container{background:#fff;border-radius:24px;padding:40px 30px;max-width:500px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:ms .5s cubic-bezier(.34,1.56,.64,1)}
-@keyframes ms{from{opacity:0;transform:translateY(40px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
-.mode-header{text-align:center;margin-bottom:32px}
-.mode-header-icon{width:70px;height:70px;margin:0 auto 16px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;box-shadow:0 8px 24px rgba(102,126,234,.3)}
-.mode-header h2{font-size:24px;font-weight:700;color:#1a202c;margin-bottom:8px}
-.mode-header p{font-size:14px;color:#718096;font-weight:400}
-.mode-cards{display:grid;gap:16px;margin-bottom:24px}
-.mode-card{background:#f7fafc;border:2px solid #e2e8f0;border-radius:16px;padding:20px;cursor:pointer;transition:all .3s;position:relative}
-.mode-card:hover{transform:translateY(-3px);box-shadow:0 12px 28px rgba(102,126,234,.15);border-color:#cbd5e0}
-.mode-card.selected{border-color:#667eea;background:#fff;box-shadow:0 8px 24px rgba(102,126,234,.2);transform:translateY(-2px)}
-.mode-card-header{display:flex;align-items:center}
-.mode-icon{width:54px;height:54px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin-right:16px;flex-shrink:0}
-.exam-mode .mode-icon{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);color:#fff}
-.practice-mode .mode-icon{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%);color:#fff}
-.mode-info h3{font-size:17px;font-weight:700;color:#1a202c;margin-bottom:4px}
-.mode-info p{font-size:13px;color:#718096;line-height:1.4}
-.timer-config{margin-bottom:24px}
-.timer-config label{display:block;font-size:14px;font-weight:600;color:#1a202c;margin-bottom:10px}
-.timer-config label i{margin-right:6px;color:#667eea}
-.timer-input{width:100%;padding:14px 16px;border:2px solid #e2e8f0;border-radius:12px;font-size:15px;font-weight:500;transition:all .3s;background:#fff;font-family:'Poppins',sans-serif;color:#1a202c}
-.timer-input::placeholder{color:#a0aec0}
-.timer-input:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.1)}
-.start-btn{width:100%;padding:16px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:700;cursor:pointer;transition:all .3s;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 20px rgba(102,126,234,.35)}
-.start-btn:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 12px 28px rgba(102,126,234,.45)}
-.start-btn:active:not(:disabled){transform:translateY(0)}
-.start-btn:disabled{opacity:.5;cursor:not-allowed;background:#cbd5e0;box-shadow:none}
-#quizContainer{display:none;position:fixed;top:0;left:0;width:100%;height:100vh;background:var(--bg-light);overflow:hidden}
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1">
+<title>{_esc(title)}</title>
+{_GOOGLE_FONTS_LINK}
+{_FONT_AWESOME_LINK}
+<style>{_BASE_CSS}
+{extra_head}
+</style>
+</head>
+<body>
+{body}
+<script>{_THEME_JS}</script>
+{extra_scripts}
+</body>
+</html>
+"""
 
-/* MODIFIED HEADER SIZES FOR COMPACTNESS */
-.quiz-header{position:fixed;top:0;left:0;right:0;background:var(--bg-white);box-shadow:0 2px 15px rgba(0,0,0,.08);z-index:100;padding:8px 12px}
-.header-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px}
-.quiz-title{font-size:14px;font-weight:700;color:var(--text-dark);display:flex;align-items:center;gap:8px;flex:1;min-width:0}
-.quiz-title-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}
-.mode-badge{font-size:9px;padding:3px 8px;border-radius:20px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
-.mode-badge.exam{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);color:#fff}
-.mode-badge.practice{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%);color:#fff}
-.header-actions{display:flex;gap:8px;align-items:center}
-.theme-toggle{width:32px;height:32px;background:var(--bg-light);border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--text-dark);transition:all .3s}
-.theme-toggle:hover{transform:scale(1.1)}
-.timer-display{display:flex;align-items:center;gap:6px;font-size:14px;font-weight:700;color:var(--primary);padding:5px 10px;background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);border-radius:12px;white-space:nowrap}
-.timer-display.warning{color:var(--danger);background:linear-gradient(135deg,rgba(245,87,108,.15) 0%,rgba(240,147,251,.15) 100%);animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.7}}
-.header-progress{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-light);margin-bottom:4px}
-.progress-bar-container{height:6px;background:var(--border);border-radius:10px;overflow:hidden}
-.progress-bar{height:100%;background:linear-gradient(90deg,var(--primary) 0%,var(--secondary) 100%);transition:width .3s;border-radius:10px}
 
-/* ADJUSTED FOR SMALLER HEADER & NAV FOOTER */
-.question-section{position:fixed;top:105px;left:0;right:0;bottom:70px;overflow-y:auto;overflow-x:hidden;padding:15px;-webkit-overflow-scrolling:touch}
-.question-section.scrollable{scrollbar-width:thin;scrollbar-color:var(--primary) transparent}
+# --------------------------------------------------------------------------
+# render_quiz_html: CBT-exam-style interactive quiz page
+# --------------------------------------------------------------------------
 
-/* MODIFIED FONT SIZES FOR QUESTIONS/OPTIONS */
-.question-card{background:var(--bg-white);border-radius:20px;padding:20px;box-shadow:0 4px 20px rgba(0,0,0,.06);max-width:800px;margin:0 auto}
-.question-number{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--primary);background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);padding:5px 10px;border-radius:20px;margin-bottom:12px}
-.question-reference{background:linear-gradient(135deg,rgba(79,172,254,.15) 0%,rgba(0,242,254,.15) 100%);border-left:4px solid var(--info);padding:10px 12px;border-radius:10px;margin-bottom:12px;font-size:12px;color:var(--text-dark);line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
-.question-text{font-size:14px;font-weight:600;color:var(--text-dark);line-height:1.6;margin-bottom:16px;white-space:pre-wrap;word-wrap:break-word;word-break:break-word}
-.options-container{display:grid;gap:10px}
-.option-btn{width:100%;padding:12px 15px;background:var(--bg-light);border:2px solid var(--border);border-radius:12px;text-align:left;font-size:13px;color:var(--text-dark);cursor:pointer;transition:all .3s;display:flex;align-items:flex-start;gap:10px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word;word-break:break-word;user-select:none}
-.option-btn:active{transform:scale(.98)}
-.option-indicator{min-width:24px;height:24px;border-radius:50%;background:var(--bg-white);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;transition:all .3s}
-.option-text{flex:1;padding-top:2px}
-.option-btn:hover:not(.disabled){border-color:var(--primary);transform:translateX(4px)}
-.option-btn.selected{background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);border-color:var(--primary)}
-.option-btn.selected .option-indicator{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border-color:transparent}
-.option-btn.correct{background:linear-gradient(135deg,rgba(72,187,120,.15) 0%,rgba(72,187,120,.15) 100%);border-color:var(--success)}
-.option-btn.correct .option-indicator{background:var(--success);color:#fff;border-color:transparent}
-.option-btn.incorrect{background:linear-gradient(135deg,rgba(245,87,108,.15) 0%,rgba(245,87,108,.15) 100%);border-color:var(--danger)}
-.option-btn.incorrect .option-indicator{background:var(--danger);color:#fff;border-color:transparent}
-.option-btn.disabled{pointer-events:none;opacity:.6}
-.explanation-box{display:none;background:linear-gradient(135deg,rgba(254,245,231,.5) 0%,rgba(251,191,36,.2) 100%);border-left:4px solid var(--warning);border-radius:12px;padding:12px;margin-top:16px;animation:sd .3s ease-out}
-@keyframes sd{from{opacity:0;max-height:0;padding:0}to{opacity:1;max-height:500px;padding:12px}}
-.explanation-header{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:#92400e;margin-bottom:8px}
-.explanation-text{font-size:12px;color:#78350f;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
-[data-theme="dark"] .explanation-text{color:#fbbf24}
-.nav-controls{position:fixed;bottom:0;left:0;right:0;background:var(--bg-white);padding:10px 16px;box-shadow:0 -2px 15px rgba(0,0,0,.08);display:flex;gap:10px;z-index:90}
-.nav-btn{flex:1;padding:12px;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;transition:all .3s;display:flex;align-items:center;justify-content:center;gap:6px}
-.nav-btn.primary{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff}
-.nav-btn.secondary{background:var(--bg-light);color:var(--text-dark);border:2px solid var(--border)}
-.nav-btn:active{transform:scale(.96)}
-.nav-btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
-.question-nav-toggle{position:fixed;bottom:85px;right:20px;width:48px;height:48px;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border:none;border-radius:50%;font-size:18px;cursor:pointer;box-shadow:0 8px 20px rgba(102,126,234,.4);z-index:85;transition:all .3s}
-.question-nav-toggle:active{transform:scale(.95)}
-.question-nav-panel{position:fixed;bottom:0;left:0;right:0;background:var(--bg-white);border-radius:24px 24px 0 0;box-shadow:0 -4px 30px rgba(0,0,0,.15);z-index:95;max-height:70vh;overflow-y:auto;transform:translateY(100%);transition:transform .3s;padding:20px}
-.question-nav-panel.open{transform:translateY(0)}
-.nav-panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid var(--border)}
-.nav-panel-title{font-size:16px;font-weight:700;color:var(--text-dark)}
-.nav-close-btn{width:32px;height:32px;background:var(--bg-light);border:none;border-radius:50%;font-size:16px;cursor:pointer;color:var(--text-light)}
-.nav-legend{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;font-size:11px;color:var(--text-dark)}
-.legend-item{display:flex;align-items:center;gap:6px;color:var(--text-dark)}
-.legend-box{width:16px;height:16px;border-radius:4px}
-.legend-box.answered{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%)}
-.legend-box.marked{background:linear-gradient(135deg,var(--warning) 0%,#f59e0b 100%)}
-.legend-box.unanswered{background:var(--border)}
-.question-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
-.question-nav-item{aspect-ratio:1;border:2px solid var(--border);border-radius:8px;background:var(--bg-white);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;cursor:pointer;transition:all .3s;color:var(--text-light)}
-.question-nav-item:active{transform:scale(.95)}
-.question-nav-item.current{border-color:var(--primary);background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);color:var(--primary)}
-.question-nav-item.answered{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border-color:transparent}
-.question-nav-item.marked{background:linear-gradient(135deg,var(--warning) 0%,#f59e0b 100%);color:#fff;border-color:transparent}
-.question-nav-item.correct{background:linear-gradient(135deg,var(--success) 0%,#38a169 100%);color:#fff;border-color:transparent}
-.question-nav-item.incorrect{background:linear-gradient(135deg,var(--danger) 0%,#e53e3e 100%);color:#fff;border-color:transparent}
-#resultsContainer{display:none;position:fixed;top:0;left:0;width:100%;height:100vh;background:var(--bg-light);overflow-y:auto;overflow-x:hidden;padding:20px;z-index:1000}
-#resultsContainer.scrollable{scrollbar-width:thin;scrollbar-color:var(--primary) transparent}
-.results-header{text-align:center;padding:40px 20px;background:var(--bg-white);border-radius:20px;margin-bottom:20px;box-shadow:0 4px 20px rgba(0,0,0,.06)}
-.results-icon{font-size:60px;margin-bottom:15px}
-.results-title{font-size:22px;font-weight:700;color:var(--text-dark);margin-bottom:8px}
-.results-score{font-size:44px;font-weight:800;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:8px}
-.results-percentage{font-size:18px;color:var(--text-light);font-weight:600}
-.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;max-width:800px;margin-left:auto;margin-right:auto}
-.stat-card{background:var(--bg-white);padding:18px;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,.06)}
-.stat-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;margin-bottom:10px}
-.stat-icon.correct{background:linear-gradient(135deg,var(--success) 0%,#38a169 100%);color:#fff}
-.stat-icon.incorrect{background:linear-gradient(135deg,var(--danger) 0%,#e53e3e 100%);color:#fff}
-.stat-icon.unattempted{background:linear-gradient(135deg,#a0aec0 0%,#718096 100%);color:#fff}
-.stat-icon.negative{background:linear-gradient(135deg,#ed8936 0%,#dd6b20 100%);color:#fff}
-.stat-value{font-size:26px;font-weight:700;color:var(--text-dark);margin-bottom:2px}
-.stat-label{font-size:12px;color:var(--text-light);font-weight:500}
-.action-buttons{display:grid;gap:10px;max-width:800px;margin:0 auto}
-.action-btn{width:100%;padding:14px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .3s}
-.action-btn.primary{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff}
-.action-btn.secondary{background:var(--bg-white);color:var(--text-dark);border:2px solid var(--border)}
-.action-btn:hover{transform:translateY(-2px)}
+_QUIZ_CSS = """
+.exam-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  padding: 20px 0 60px;
+}
+@media (min-width: 900px) {
+  .exam-layout { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+}
 
+.exam-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px;
+  margin-bottom: 4px;
+}
+.exam-title { font-size: 1.15rem; font-weight: 800; }
+.exam-meta { color: var(--color-text-muted); font-size: 0.85rem; margin-top: 2px; }
+
+.timer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 1.05rem;
+}
+.timer-pill.low { background: var(--color-danger-soft); color: var(--color-danger); }
+
+.question-card { padding: 24px clamp(16px, 4vw, 32px); margin-bottom: 16px; }
+.question-index {
+  color: var(--color-text-muted);
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.question-text {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.55;
+  margin-bottom: 22px;
+  white-space: pre-wrap;
+}
+
+.option-list { display: flex; flex-direction: column; gap: 12px; }
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  background: var(--color-surface);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.option:hover { border-color: var(--color-primary); background: var(--color-primary-soft); }
+.option.selected { border-color: var(--color-primary); background: var(--color-primary-soft); }
+.option.correct { border-color: var(--color-success); background: var(--color-success-soft); }
+.option.incorrect { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.option-key {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 0.85rem;
+  background: var(--color-surface-alt);
+}
+.option.selected .option-key { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.option.correct .option-key { background: var(--color-success); color: #fff; border-color: var(--color-success); }
+.option.incorrect .option-key { background: var(--color-danger); color: #fff; border-color: var(--color-danger); }
+.option-text { padding-top: 3px; line-height: 1.5; }
+.option-icon { margin-left: auto; padding-top: 4px; font-size: 1rem; }
+
+.explanation-box {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  border-left: 4px solid var(--color-accent);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  display: none;
+}
+.explanation-box.show { display: block; }
+.explanation-box strong { color: var(--color-accent); }
+
+.exam-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 4px 2px;
+}
+.exam-actions .group { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.sidebar { display: flex; flex-direction: column; gap: 16px; }
+.sidebar-card { padding: 18px; }
+.sidebar-title {
+  font-weight: 800;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+}
+.qgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 8px;
+}
+.qgrid button {
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  border: 1.5px solid var(--color-border);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font-weight: 700;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.qgrid button.current { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.qgrid button.answered { background: var(--color-success); color: #fff; border-color: var(--color-success); }
+.qgrid button.review { background: var(--color-warning); color: #fff; border-color: var(--color-warning); }
+.qgrid button.answered-review { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.qgrid button.unanswered { background: var(--color-surface-alt); }
+
+.legend { display: flex; flex-direction: column; gap: 8px; font-size: 0.82rem; margin-top: 14px; }
+.legend-item { display: flex; align-items: center; gap: 8px; }
+.legend-dot { width: 12px; height: 12px; border-radius: 4px; flex: 0 0 auto; }
+
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--color-surface-alt);
+  overflow: hidden;
+  margin-top: 10px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+/* Results screen */
+.results-hero {
+  text-align: center;
+  padding: 40px clamp(16px, 5vw, 48px);
+  margin-bottom: 20px;
+}
+.results-score {
+  font-size: clamp(2.4rem, 8vw, 3.2rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 6px 0;
+}
+.results-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-top: 8px;
+}
+.results-verdict.pass { background: var(--color-success-soft); color: var(--color-success); }
+.results-verdict.fail { background: var(--color-danger-soft); color: var(--color-danger); }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-top: 26px;
+}
+@media (min-width: 640px) { .stat-grid { grid-template-columns: repeat(4, 1fr); } }
+.stat-tile {
+  background: var(--color-surface-alt);
+  border-radius: var(--radius-md);
+  padding: 16px 12px;
+  text-align: center;
+}
+.stat-tile .value { font-size: 1.5rem; font-weight: 800; }
+.stat-tile .label { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
+
+.review-toggle-wrap { text-align: center; margin: 24px 0; }
+
+#reviewSection { display: none; }
+#reviewSection.show { display: block; }
+
+.hidden { display: none !important; }
+
+@media (max-width: 899px) {
+  .sidebar { order: -1; }
+  .qgrid { grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); }
+}
+"""
+
+# JS template for the exam runner. `%%DATA%%` is replaced with a JSON blob
+# describing the quiz; everything else is static behaviour.
+_QUIZ_JS_TEMPLATE = """
+(function () {
+  var QUIZ = %%DATA%%;
+  var questions = QUIZ.questions;
+  var totalTime = QUIZ.timerPerQuestion; // seconds, per question
+  var correctMarks = QUIZ.correctMarks;
+  var negativeMarks = QUIZ.negativeMarks;
+
+  var state = {
+    current: 0,
+    answers: new Array(questions.length).fill(null),
+    marked: new Array(questions.length).fill(false),
+    visited: new Array(questions.length).fill(false),
+    submitted: false,
+    secondsLeft: totalTime,
+    timerId: null
+  };
+
+  var els = {};
+  function q(id) { return document.getElementById(id); }
+
+  function fmtTime(s) {
+    s = Math.max(0, s | 0);
+    var m = Math.floor(s / 60);
+    var r = s % 60;
+    return (m < 10 ? '0' : '') + m + ':' + (r < 10 ? '0' : '') + r;
+  }
+
+  function renderGrid() {
+    var grid = els.qgrid;
+    grid.innerHTML = '';
+    questions.forEach(function (_, i) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = (i + 1);
+      var cls = 'unanswered';
+      var answered = state.answers[i] !== null;
+      var marked = state.marked[i];
+      if (answered && marked) cls = 'answered-review';
+      else if (marked) cls = 'review';
+      else if (answered) cls = 'answered';
+      else if (state.visited[i]) cls = 'unanswered';
+      btn.className = cls + (i === state.current ? ' current' : '');
+      btn.addEventListener('click', function () { goTo(i); });
+      grid.appendChild(btn);
+    });
+  }
+
+  function renderProgress() {
+    var answeredCount = state.answers.filter(function (a) { return a !== null; }).length;
+    var pct = Math.round((answeredCount / questions.length) * 100);
+    els.progressFill.style.width = pct + '%';
+    els.progressLabel.textContent = answeredCount + ' / ' + questions.length + ' answered';
+  }
+
+  function renderQuestion() {
+    var idx = state.current;
+    var qd = questions[idx];
+    state.visited[idx] = true;
+
+    els.qIndex.textContent = 'Question ' + (idx + 1) + ' of ' + questions.length;
+    els.qText.textContent = qd.question;
+
+    els.optionList.innerHTML = '';
+    qd.options.forEach(function (opt, i) {
+      var row = document.createElement('div');
+      row.className = 'option' + (state.answers[idx] === i ? ' selected' : '');
+      row.setAttribute('role', 'button');
+      row.setAttribute('tabindex', '0');
+      var key = document.createElement('div');
+      key.className = 'option-key';
+      key.textContent = String.fromCharCode(65 + i);
+      var text = document.createElement('div');
+      text.className = 'option-text';
+      text.textContent = opt;
+      row.appendChild(key);
+      row.appendChild(text);
+      row.addEventListener('click', function () { selectOption(i); });
+      els.optionList.appendChild(row);
+    });
+
+    els.markBtn.classList.toggle('btn-primary', state.marked[idx]);
+    els.markBtn.classList.toggle('btn-outline', !state.marked[idx]);
+    els.markBtn.innerHTML = state.marked[idx]
+      ? '<i class="fa-solid fa-bookmark"></i> Marked for review'
+      : '<i class="fa-regular fa-bookmark"></i> Mark for review';
+
+    els.prevBtn.disabled = idx === 0;
+    els.nextBtn.textContent = idx === questions.length - 1 ? 'Finish' : 'Next';
+    els.nextBtn.innerHTML = idx === questions.length - 1
+      ? 'Review & Submit <i class="fa-solid fa-flag-checkered"></i>'
+      : 'Next <i class="fa-solid fa-arrow-right"></i>';
+
+    renderGrid();
+    renderProgress();
+    resetTimer();
+  }
+
+  function selectOption(i) {
+    if (state.submitted) return;
+    state.answers[state.current] = i;
+    renderQuestion();
+  }
+
+  function goTo(i) {
+    if (i < 0 || i >= questions.length) return;
+    state.current = i;
+    renderQuestion();
+  }
+
+  function toggleMark() {
+    state.marked[state.current] = !state.marked[state.current];
+    renderQuestion();
+  }
+
+  function resetTimer() {
+    clearInterval(state.timerId);
+    if (state.submitted || !totalTime) {
+      els.timerPill.classList.add('hidden');
+      return;
+    }
+    els.timerPill.classList.remove('hidden');
+    state.secondsLeft = totalTime;
+    updateTimerUI();
+    state.timerId = setInterval(function () {
+      state.secondsLeft -= 1;
+      updateTimerUI();
+      if (state.secondsLeft <= 0) {
+        clearInterval(state.timerId);
+        if (state.current < questions.length - 1) {
+          goTo(state.current + 1);
+        } else {
+          submitQuiz();
+        }
+      }
+    }, 1000);
+  }
+
+  function updateTimerUI() {
+    els.timerPill.innerHTML = '<i class="fa-regular fa-clock"></i> ' + fmtTime(state.secondsLeft);
+    els.timerPill.classList.toggle('low', state.secondsLeft <= 10);
+  }
+
+  function computeScore() {
+    var correct = 0, wrong = 0, unattempted = 0;
+    questions.forEach(function (qd, i) {
+      var a = state.answers[i];
+      if (a === null || a === undefined) { unattempted += 1; return; }
+      if (a === qd.correctOption) correct += 1; else wrong += 1;
+    });
+    var score = (correct * correctMarks) - (wrong * negativeMarks);
+    var maxScore = questions.length * correctMarks;
+    return { correct: correct, wrong: wrong, unattempted: unattempted, score: score, maxScore: maxScore };
+  }
+
+  function submitQuiz() {
+    if (state.submitted) return;
+    state.submitted = true;
+    clearInterval(state.timerId);
+    var result = computeScore();
+
+    var pct = result.maxScore > 0 ? (result.score / result.maxScore) * 100 : 0;
+    var passed = pct >= (QUIZ.passPercent || 40);
+
+    q('examView').classList.add('hidden');
+    q('resultsView').classList.remove('hidden');
+
+    q('scoreValue').textContent = result.score.toFixed(2) + ' / ' + result.maxScore.toFixed(2);
+    var verdict = q('verdictBadge');
+    verdict.textContent = passed ? 'PASSED' : 'NOT CLEARED';
+    verdict.className = 'results-verdict ' + (passed ? 'pass' : 'fail');
+    q('statCorrect').textContent = result.correct;
+    q('statWrong').textContent = result.wrong;
+    q('statUnattempted').textContent = result.unattempted;
+    q('statPercent').textContent = pct.toFixed(1) + '%';
+
+    renderReview();
+  }
+
+  function renderReview() {
+    var wrap = q('reviewList');
+    wrap.innerHTML = '';
+    questions.forEach(function (qd, i) {
+      var userAns = state.answers[i];
+      var card = document.createElement('div');
+      card.className = 'card question-card';
+
+      var idxEl = document.createElement('div');
+      idxEl.className = 'question-index';
+      idxEl.textContent = 'Question ' + (i + 1) + ' of ' + questions.length;
+      card.appendChild(idxEl);
+
+      var textEl = document.createElement('div');
+      textEl.className = 'question-text';
+      textEl.textContent = qd.question;
+      card.appendChild(textEl);
+
+      var list = document.createElement('div');
+      list.className = 'option-list';
+      qd.options.forEach(function (opt, oi) {
+        var row = document.createElement('div');
+        var cls = 'option';
+        if (oi === qd.correctOption) cls += ' correct';
+        else if (oi === userAns) cls += ' incorrect';
+        row.className = cls;
+        var key = document.createElement('div');
+        key.className = 'option-key';
+        key.textContent = String.fromCharCode(65 + oi);
+        var text = document.createElement('div');
+        text.className = 'option-text';
+        text.textContent = opt;
+        row.appendChild(key);
+        row.appendChild(text);
+        if (oi === qd.correctOption) {
+          var icon = document.createElement('div');
+          icon.className = 'option-icon';
+          icon.innerHTML = '<i class="fa-solid fa-circle-check" style="color:var(--color-success)"></i>';
+          row.appendChild(icon);
+        } else if (oi === userAns) {
+          var icon2 = document.createElement('div');
+          icon2.className = 'option-icon';
+          icon2.innerHTML = '<i class="fa-solid fa-circle-xmark" style="color:var(--color-danger)"></i>';
+          row.appendChild(icon2);
+        }
+        list.appendChild(row);
+      });
+      card.appendChild(list);
+
+      if (qd.explanation) {
+        var expl = document.createElement('div');
+        expl.className = 'explanation-box show';
+        var strong = document.createElement('strong');
+        strong.textContent = 'Explanation: ';
+        expl.appendChild(strong);
+        expl.appendChild(document.createTextNode(qd.explanation));
+        card.appendChild(expl);
+      }
+      wrap.appendChild(card);
+    });
+  }
+
+  function bindKeyboard() {
+    document.addEventListener('keydown', function (e) {
+      if (state.submitted) return;
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.key === 'ArrowRight') { goTo(Math.min(state.current + 1, questions.length - 1)); }
+      else if (e.key === 'ArrowLeft') { goTo(Math.max(state.current - 1, 0)); }
+      else if (['1', '2', '3', '4', '5', '6'].indexOf(e.key) !== -1) {
+        var i = parseInt(e.key, 10) - 1;
+        if (i < questions[state.current].options.length) selectOption(i);
+      } else if (e.key.toLowerCase() === 'm') {
+        toggleMark();
+      }
+    });
+  }
+
+  window.addEventListener('DOMContentLoaded', function () {
+    els.qIndex = q('qIndex');
+    els.qText = q('qText');
+    els.optionList = q('optionList');
+    els.qgrid = q('qgrid');
+    els.progressFill = q('progressFill');
+    els.progressLabel = q('progressLabel');
+    els.timerPill = q('timerPill');
+    els.markBtn = q('markBtn');
+    els.prevBtn = q('prevBtn');
+    els.nextBtn = q('nextBtn');
+
+    els.prevBtn.addEventListener('click', function () { goTo(state.current - 1); });
+    els.nextBtn.addEventListener('click', function () {
+      if (state.current === questions.length - 1) {
+        submitQuiz();
+      } else {
+        goTo(state.current + 1);
+      }
+    });
+    els.markBtn.addEventListener('click', toggleMark);
+    q('submitBtn').addEventListener('click', function () {
+      if (confirm('Submit the quiz now? You will not be able to change your answers.')) {
+        submitQuiz();
+      }
+    });
+
+    bindKeyboard();
+    renderQuestion();
+  });
+})();
+"""
+
+
+def _je(t: Any) -> str:
+    """JS string-literal escape (matches the legacy generator's `je()`
+    helper exactly -- used only inside JS string literals we hand-build,
+    not via json.dumps, to stay byte-for-byte compatible with the ported
+    generator)."""
+    if not t:
+        return ""
+    t = str(t)
+    return (
+        t.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("'", "\\'")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+# Desktop CBT (computer-based-test) responsive styles, ported verbatim.
+_QUIZ_DESKTOP_CSS = """
 @media (min-width: 1024px) {
     body { overflow: auto !important; }
+
     #quizContainer {
         display: grid !important;
         grid-template-columns: 1fr 320px;
@@ -164,49 +886,61 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
         height: 100vh;
         overflow: hidden;
     }
+
     .quiz-header {
         grid-column: 1 / -1;
         position: static;
-        padding: 12px 20px;
+        padding: 20px 32px;
         border-bottom: 3px solid var(--border);
     }
+
     .header-top {
         max-width: none;
-        margin-bottom: 10px;
+        margin-bottom: 16px;
     }
+
     .quiz-title-text { max-width: 400px; }
+
     .timer-display {
-        padding: 6px 12px;
-        font-size: 15px;
+        padding: 10px 20px;
+        font-size: 18px;
     }
+
+    /* Main content area - scrollable */
     .question-section {
         position: static !important;
         grid-column: 1;
         grid-row: 2;
         overflow-y: auto;
-        padding: 24px;
+        padding: 32px;
         background: var(--bg-light);
         top: auto !important;
         bottom: auto !important;
     }
+
     .question-card {
         max-width: 900px;
-        padding: 24px;
-        margin: 0 auto 20px;
+        padding: 32px;
+        margin: 0 auto 24px;
     }
+
     .question-text {
-        font-size: 16px;
-        margin-bottom: 20px;
+        font-size: 18px;
+        margin-bottom: 24px;
     }
+
     .option-btn {
-        padding: 14px 18px;
+        padding: 18px 20px;
+        font-size: 16px;
+    }
+
+    .option-indicator {
+        min-width: 32px;
+        height: 32px;
         font-size: 14px;
     }
-    .option-indicator {
-        min-width: 28px;
-        height: 28px;
-        font-size: 12px;
-    }
+
+    /* Desktop Question Navigator - Right Panel */
     .question-nav-panel {
         position: static !important;
         grid-column: 2;
@@ -221,7 +955,9 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
         overflow-y: auto;
         background: var(--bg-white);
     }
+
     .question-nav-panel.open { transform: none !important; }
+
     .nav-panel-header {
         position: sticky;
         top: 0;
@@ -230,12 +966,15 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
         padding-bottom: 20px;
         margin-bottom: 20px;
     }
+
     .nav-panel-title {
-        font-size: 15px;
+        font-size: 16px;
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
+
     .nav-close-btn { display: none; }
+
     .nav-legend {
         position: sticky;
         top: 60px;
@@ -246,107 +985,337 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
         border-radius: 12px;
         background: var(--bg-light);
     }
+
     .question-grid {
         grid-template-columns: repeat(4, 1fr);
-        gap: 10px;
+        gap: 12px;
     }
+
     .question-nav-item {
         aspect-ratio: 1;
-        font-size: 14px;
-        border-radius: 10px;
+        font-size: 16px;
+        border-radius: 12px;
     }
+
     .question-nav-toggle { display: none; }
+
+    /* Footer Navigation - Sticky */
     .nav-controls {
         position: static;
         grid-column: 1;
         grid-row: 3;
-        padding: 12px 20px;
+        padding: 20px 32px;
         border-top: 3px solid var(--border);
         max-width: none;
         display: flex;
         justify-content: center;
         gap: 16px;
     }
+
     .nav-btn {
-        min-width: 140px;
-        padding: 14px 20px;
-        font-size: 14px;
+        min-width: 160px;
+        padding: 16px 24px;
+        font-size: 16px;
     }
+
+    /* Results Desktop Layout */
     #resultsContainer {
         padding: 40px;
         max-width: 1400px;
         margin: 0 auto;
     }
+
     .results-header {
-        padding: 50px 30px;
-        margin-bottom: 24px;
+        padding: 60px 40px;
+        margin-bottom: 32px;
     }
-    .results-icon { font-size: 80px; }
-    .results-title { font-size: 30px; }
-    .results-score { font-size: 56px; }
-    .results-percentage { font-size: 20px; }
+
+    .results-icon { font-size: 100px; }
+    .results-title { font-size: 36px; }
+    .results-score { font-size: 64px; }
+    .results-percentage { font-size: 24px; }
+
     .stats-grid {
         grid-template-columns: repeat(4, 1fr);
-        gap: 16px;
-        margin-bottom: 24px;
+        gap: 20px;
+        margin-bottom: 32px;
         max-width: none;
     }
-    .stat-card { padding: 24px; }
-    .stat-icon { width: 48px; height: 48px; font-size: 20px; }
-    .stat-value { font-size: 32px; }
-    .stat-label { font-size: 13px; }
+
+    .stat-card { padding: 32px; }
+    .stat-icon { width: 54px; height: 54px; font-size: 24px; }
+    .stat-value { font-size: 40px; }
+    .stat-label { font-size: 14px; }
+
     .action-buttons {
         grid-template-columns: repeat(2, 1fr);
-        gap: 16px;
+        gap: 20px;
         max-width: 800px;
     }
-    .action-btn { padding: 16px; font-size: 15px; }
+
+    .action-btn { padding: 20px; font-size: 17px; }
+
+    /* Mode Selection Desktop */
     .mode-container {
         max-width: 600px;
-        padding: 40px 30px;
+        padding: 50px 40px;
     }
+
     .mode-header-icon {
-        width: 76px;
-        height: 76px;
-        font-size: 36px;
+        width: 80px;
+        height: 80px;
+        font-size: 40px;
     }
-    .mode-header h2 { font-size: 26px; }
-    .mode-header p { font-size: 14px; }
-    .mode-cards { gap: 16px; }
+
+    .mode-header h2 { font-size: 28px; }
+    .mode-header p { font-size: 15px; }
+
+    .mode-cards { gap: 20px; }
+
     .mode-card {
-        padding: 20px;
-        border-radius: 16px;
+        padding: 24px;
+        border-radius: 18px;
     }
+
     .mode-icon {
-        width: 54px;
-        height: 54px;
-        font-size: 24px;
-        margin-right: 16px;
+        width: 60px;
+        height: 60px;
+        font-size: 28px;
+        margin-right: 20px;
     }
-    .mode-info h3 { font-size: 17px; }
-    .mode-info p { font-size: 13px; }
-    .timer-input { padding: 14px 16px; font-size: 15px; }
-    .start-btn { padding: 16px; font-size: 16px; }
+
+    .mode-info h3 { font-size: 19px; }
+    .mode-info p { font-size: 14px; }
+
+    .timer-input { padding: 16px 18px; font-size: 16px; }
+    .start-btn { padding: 18px; font-size: 17px; }
 }
 
+/* Ultra-wide Desktop */
 @media (min-width: 1440px) {
     #quizContainer {
         grid-template-columns: 1fr 380px;
     }
-    .question-section { padding: 32px 48px; }
-    .question-card { max-width: 1000px; padding: 32px; }
+
+    .question-section { padding: 40px 60px; }
+    .question-card { max-width: 1000px; padding: 40px; }
     .question-nav-panel { padding: 32px; }
     .question-grid { grid-template-columns: repeat(5, 1fr); }
-    .nav-controls { padding: 16px 48px; }
+    .nav-controls { padding: 24px 60px; }
 }
+"""
+
+
+async def render_quiz_html(quiz: dict, *, mode: str = "exam") -> tuple[bytes, str]:
+    """Build the full, self-contained interactive "Premium Quiz" CBT-style
+    HTML report -- ported verbatim (markup/CSS/JS) from the original
+    ``generate_quiz_html`` generator, adapted only so it *returns*
+    ``(html_bytes, filename)`` instead of writing a temp file and calling
+    ``bot.send_document`` itself (the caller in quiz_play.py owns that).
+
+    Per explicit product decision, each question's options are freshly
+    ``random.shuffle``-d at report-generation time (same as the original
+    generator) -- the option lettering in this downloaded report can
+    therefore differ from what was actually shown live during the quiz.
+    ``mode`` is accepted for signature compatibility; the generated page
+    itself always offers both Exam/Practice mode selection to the viewer,
+    matching the original generator's behaviour.
+    """
+    quiz_name = quiz.get("quiz_name") or "Untitled Quiz"
+    questions = quiz.get("questions") or []
+    n_questions = len(questions)
+    negative_marks = quiz.get("negative_marks", 0.25)
+    timer_per_q = int(quiz.get("timer", 60) or 60)
+    total_time = timer_per_q * n_questions
+
+    # Build the per-question JS objects, shuffling each question's options
+    # fresh on every render (kept intentionally -- see docstring above).
+    q_js_items = []
+    for i, q in enumerate(questions):
+        opts = list(q.get("options") or [])
+        correct_idx = int(q.get("correct_option_id", 0) or 0)
+        correct_opt = opts[correct_idx] if 0 <= correct_idx < len(opts) else (opts[0] if opts else "")
+        random.shuffle(opts)
+        try:
+            new_correct_index = opts.index(correct_opt)
+        except ValueError:
+            new_correct_index = 0
+        opts_json = json.dumps(opts, ensure_ascii=False)
+        q_js_items.append(
+            f'{{id:{i},txt:"{_je(q.get("question", ""))}",'
+            f'ref:"{_je(q.get("reply_text", ""))}",'
+            f'opts:{opts_json},'
+            f'ci:{new_correct_index},'
+            f'exp:"{_je(q.get("explanation", "No explanation"))}"}}'
+        )
+    questions_js = ",".join(q_js_items)
+
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "", quiz_name.replace(" ", "_"))[:100] or "quiz"
+    filename = f"{safe_name}.html"
+
+    quiz_name_esc = _esc(quiz_name)
+
+    html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>{quiz_name_esc}</title>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<style>
+.katex-display{{overflow-x:auto;overflow-y:hidden;padding:4px 0}}
+.katex{{font-size:1.05em}}
+.question-text p,.explanation-text p,.question-reference p{{margin:0 0 10px}}
+.question-text p:last-child,.explanation-text p:last-child,.question-reference p:last-child{{margin-bottom:0}}
+.question-text ul,.question-text ol,.explanation-text ul,.explanation-text ol{{margin:8px 0 8px 22px}}
+.question-text code,.explanation-text code,.option-text code{{background:rgba(128,128,128,.18);padding:1px 5px;border-radius:4px;font-size:.9em}}
+.question-text pre,.explanation-text pre{{background:rgba(128,128,128,.18);padding:10px 12px;border-radius:8px;overflow-x:auto;margin:8px 0}}
+.question-text pre code,.explanation-text pre code{{background:none;padding:0}}
+.question-text table,.explanation-text table{{border-collapse:collapse;margin:8px 0}}
+.question-text th,.question-text td,.explanation-text th,.explanation-text td{{border:1px solid var(--border);padding:6px 10px}}
+.question-text img,.explanation-text img{{max-width:100%;border-radius:6px}}
+mark{{background:rgba(251,191,36,.4);color:inherit;padding:0 3px;border-radius:3px}}
+blockquote{{border-left:3px solid var(--primary);padding:4px 14px;margin:8px 0;opacity:.9;background:rgba(128,128,128,.08);border-radius:0 6px 6px 0}}
+.option-text{{overflow-x:auto}}
+.option-text p{{margin:0;display:inline}}
+
+*{{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}}
+:root{{--primary:#667eea;--primary-dark:#5568d3;--secondary:#764ba2;--success:#48bb78;--danger:#f5576c;--warning:#fbbf24;--info:#4facfe;--bg-light:#f7fafc;--bg-white:#fff;--text-dark:#1a202c;--text-light:#718096;--border:#e2e8f0}}
+[data-theme="dark"]{{--bg-light:#1a202c;--bg-white:#2d3748;--text-dark:#f7fafc;--text-light:#cbd5e0;--border:#4a5568}}
+body{{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);min-height:100vh;overflow:hidden;user-select:none;-webkit-user-select:none;transition:background .3s}}
+.scrollable::-webkit-scrollbar{{width:6px}}
+.scrollable::-webkit-scrollbar-track{{background:transparent}}
+.scrollable::-webkit-scrollbar-thumb{{background:var(--primary);border-radius:10px}}
+.protected-content{{white-space:pre-wrap;word-wrap:break-word;word-break:break-word;line-height:1.6;user-select:none}}
+#modeSelection{{position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);display:flex;align-items:center;justify-content:center;z-index:9999;padding:20px;overflow-y:auto}}
+.mode-container{{background:#fff;border-radius:24px;padding:40px 30px;max-width:500px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);animation:ms .5s cubic-bezier(.34,1.56,.64,1)}}
+@keyframes ms{{from{{opacity:0;transform:translateY(40px) scale(.95)}}to{{opacity:1;transform:translateY(0) scale(1)}}}}
+.mode-header{{text-align:center;margin-bottom:32px}}
+.mode-header-icon{{width:70px;height:70px;margin:0 auto 16px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:36px;color:#fff;box-shadow:0 8px 24px rgba(102,126,234,.3)}}
+.mode-header h2{{font-size:24px;font-weight:700;color:#1a202c;margin-bottom:8px}}
+.mode-header p{{font-size:14px;color:#718096;font-weight:400}}
+.mode-cards{{display:grid;gap:16px;margin-bottom:24px}}
+.mode-card{{background:#f7fafc;border:2px solid #e2e8f0;border-radius:16px;padding:20px;cursor:pointer;transition:all .3s;position:relative}}
+.mode-card:hover{{transform:translateY(-3px);box-shadow:0 12px 28px rgba(102,126,234,.15);border-color:#cbd5e0}}
+.mode-card.selected{{border-color:#667eea;background:#fff;box-shadow:0 8px 24px rgba(102,126,234,.2);transform:translateY(-2px)}}
+.mode-card-header{{display:flex;align-items:center}}
+.mode-icon{{width:54px;height:54px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:24px;margin-right:16px;flex-shrink:0}}
+.exam-mode .mode-icon{{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);color:#fff}}
+.practice-mode .mode-icon{{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%);color:#fff}}
+.mode-info h3{{font-size:17px;font-weight:700;color:#1a202c;margin-bottom:4px}}
+.mode-info p{{font-size:13px;color:#718096;line-height:1.4}}
+.timer-config{{margin-bottom:24px}}
+.timer-config label{{display:block;font-size:14px;font-weight:600;color:#1a202c;margin-bottom:10px}}
+.timer-config label i{{margin-right:6px;color:#667eea}}
+.timer-input{{width:100%;padding:14px 16px;border:2px solid #e2e8f0;border-radius:12px;font-size:15px;font-weight:500;transition:all .3s;background:#fff;font-family:'Poppins',sans-serif;color:#1a202c}}
+.timer-input::placeholder{{color:#a0aec0}}
+.timer-input:focus{{outline:none;border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.1)}}
+.start-btn{{width:100%;padding:16px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:700;cursor:pointer;transition:all .3s;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 20px rgba(102,126,234,.35)}}
+.start-btn:hover:not(:disabled){{transform:translateY(-2px);box-shadow:0 12px 28px rgba(102,126,234,.45)}}
+.start-btn:active:not(:disabled){{transform:translateY(0)}}
+.start-btn:disabled{{opacity:.5;cursor:not-allowed;background:#cbd5e0;box-shadow:none}}
+#quizContainer{{display:none;position:fixed;top:0;left:0;width:100%;height:100vh;background:var(--bg-light);overflow:hidden}}
+.quiz-header{{position:fixed;top:0;left:0;right:0;background:var(--bg-white);box-shadow:0 2px 15px rgba(0,0,0,.08);z-index:100;padding:16px 20px}}
+.header-top{{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:10px}}
+.quiz-title{{font-size:15px;font-weight:700;color:var(--text-dark);display:flex;align-items:center;gap:8px;flex:1;min-width:0}}
+.quiz-title-text{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px}}
+.mode-badge{{font-size:10px;padding:4px 10px;border-radius:20px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}}
+.mode-badge.exam{{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%);color:#fff}}
+.mode-badge.practice{{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%);color:#fff}}
+.header-actions{{display:flex;gap:8px;align-items:center}}
+.theme-toggle{{width:36px;height:36px;background:var(--bg-light);border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-dark);transition:all .3s}}
+.theme-toggle:hover{{transform:scale(1.1)}}
+.timer-display{{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;color:var(--primary);padding:8px 14px;background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);border-radius:12px;white-space:nowrap}}
+.timer-display.warning{{color:var(--danger);background:linear-gradient(135deg,rgba(245,87,108,.15) 0%,rgba(240,147,251,.15) 100%);animation:pulse 1s infinite}}
+@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.7}}}}
+.header-progress{{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-light);margin-bottom:8px}}
+.progress-bar-container{{height:6px;background:var(--border);border-radius:10px;overflow:hidden}}
+.progress-bar{{height:100%;background:linear-gradient(90deg,var(--primary) 0%,var(--secondary) 100%);transition:width .3s;border-radius:10px}}
+.question-section{{position:fixed;top:140px;left:0;right:0;bottom:80px;overflow-y:auto;overflow-x:hidden;padding:20px;-webkit-overflow-scrolling:touch}}
+.question-section.scrollable{{scrollbar-width:thin;scrollbar-color:var(--primary) transparent}}
+.question-card{{background:var(--bg-white);border-radius:20px;padding:24px;box-shadow:0 4px 20px rgba(0,0,0,.06);max-width:800px;margin:0 auto}}
+.question-number{{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--primary);background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);padding:6px 14px;border-radius:20px;margin-bottom:16px}}
+.question-reference{{background:linear-gradient(135deg,rgba(79,172,254,.15) 0%,rgba(0,242,254,.15) 100%);border-left:4px solid var(--info);padding:14px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;color:var(--text-dark);line-height:1.6;white-space:pre-wrap;word-wrap:break-word}}
+.question-text{{font-size:16px;font-weight:600;color:var(--text-dark);line-height:1.7;margin-bottom:20px;white-space:pre-wrap;word-wrap:break-word;word-break:break-word}}
+.options-container{{display:grid;gap:12px}}
+.option-btn{{width:100%;padding:16px 18px;background:var(--bg-light);border:3px solid var(--border);border-radius:14px;text-align:left;font-size:15px;color:var(--text-dark);cursor:pointer;transition:all .3s;display:flex;align-items:flex-start;gap:12px;line-height:1.6;white-space:pre-wrap;word-wrap:break-word;word-break:break-word;user-select:none}}
+.option-btn:active{{transform:scale(.98)}}
+.option-indicator{{min-width:28px;height:28px;border-radius:50%;background:var(--bg-white);border:2px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;transition:all .3s}}
+.option-text{{flex:1;padding-top:3px}}
+.option-btn:hover:not(.disabled){{border-color:var(--primary);transform:translateX(4px)}}
+.option-btn.selected{{background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);border-color:var(--primary)}}
+.option-btn.selected .option-indicator{{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border-color:transparent}}
+.option-btn.correct{{background:linear-gradient(135deg,rgba(72,187,120,.15) 0%,rgba(72,187,120,.15) 100%);border-color:var(--success)}}
+.option-btn.correct .option-indicator{{background:var(--success);color:#fff;border-color:transparent}}
+.option-btn.incorrect{{background:linear-gradient(135deg,rgba(245,87,108,.15) 0%,rgba(245,87,108,.15) 100%);border-color:var(--danger)}}
+.option-btn.incorrect .option-indicator{{background:var(--danger);color:#fff;border-color:transparent}}
+.option-btn.disabled{{pointer-events:none;opacity:.6}}
+.explanation-box{{display:none;background:linear-gradient(135deg,rgba(254,245,231,.5) 0%,rgba(251,191,36,.2) 100%);border-left:4px solid var(--warning);border-radius:12px;padding:16px;margin-top:20px;animation:sd .3s ease-out}}
+@keyframes sd{{from{{opacity:0;max-height:0;padding:0}}to{{opacity:1;max-height:500px;padding:16px}}}}
+.explanation-header{{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;color:#92400e;margin-bottom:10px}}
+.explanation-text{{font-size:14px;color:#78350f;line-height:1.6;white-space:pre-wrap;word-wrap:break-word}}
+[data-theme="dark"] .explanation-text{{color:#fbbf24}}
+.nav-controls{{position:fixed;bottom:0;left:0;right:0;background:var(--bg-white);padding:16px 20px;box-shadow:0 -2px 15px rgba(0,0,0,.08);display:flex;gap:12px;z-index:90}}
+.nav-btn{{flex:1;padding:14px;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;transition:all .3s;display:flex;align-items:center;justify-content:center;gap:8px}}
+.nav-btn.primary{{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff}}
+.nav-btn.secondary{{background:var(--bg-light);color:var(--text-dark);border:2px solid var(--border)}}
+.nav-btn:active{{transform:scale(.96)}}
+.nav-btn:disabled{{opacity:.5;cursor:not-allowed;transform:none}}
+.question-nav-toggle{{position:fixed;bottom:100px;right:20px;width:56px;height:56px;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border:none;border-radius:50%;font-size:22px;cursor:pointer;box-shadow:0 8px 20px rgba(102,126,234,.4);z-index:85;transition:all .3s}}
+.question-nav-toggle:active{{transform:scale(.95)}}
+.question-nav-panel{{position:fixed;bottom:0;left:0;right:0;background:var(--bg-white);border-radius:24px 24px 0 0;box-shadow:0 -4px 30px rgba(0,0,0,.15);z-index:95;max-height:70vh;overflow-y:auto;transform:translateY(100%);transition:transform .3s;padding:20px}}
+.question-nav-panel.open{{transform:translateY(0)}}
+.nav-panel-header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid var(--border)}}
+.nav-panel-title{{font-size:18px;font-weight:700;color:var(--text-dark)}}
+.nav-close-btn{{width:32px;height:32px;background:var(--bg-light);border:none;border-radius:50%;font-size:16px;cursor:pointer;color:var(--text-light)}}
+.nav-legend{{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:20px;font-size:12px;color:var(--text-dark)}}
+.legend-item{{display:flex;align-items:center;gap:6px;color:var(--text-dark)}}
+.legend-box{{width:20px;height:20px;border-radius:6px}}
+.legend-box.answered{{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%)}}
+.legend-box.marked{{background:linear-gradient(135deg,var(--warning) 0%,#f59e0b 100%)}}
+.legend-box.unanswered{{background:var(--border)}}
+.question-grid{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}
+.question-nav-item{{aspect-ratio:1;border:2px solid var(--border);border-radius:10px;background:var(--bg-white);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;cursor:pointer;transition:all .3s;color:var(--text-light)}}
+.question-nav-item:active{{transform:scale(.95)}}
+.question-nav-item.current{{border-color:var(--primary);background:linear-gradient(135deg,rgba(102,126,234,.15) 0%,rgba(118,75,162,.15) 100%);color:var(--primary)}}
+.question-nav-item.answered{{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff;border-color:transparent}}
+.question-nav-item.marked{{background:linear-gradient(135deg,var(--warning) 0%,#f59e0b 100%);color:#fff;border-color:transparent}}
+.question-nav-item.correct{{background:linear-gradient(135deg,var(--success) 0%,#38a169 100%);color:#fff;border-color:transparent}}
+.question-nav-item.incorrect{{background:linear-gradient(135deg,var(--danger) 0%,#e53e3e 100%);color:#fff;border-color:transparent}}
+#resultsContainer{{display:none;position:fixed;top:0;left:0;width:100%;height:100vh;background:var(--bg-light);overflow-y:auto;overflow-x:hidden;padding:20px;z-index:1000}}
+#resultsContainer.scrollable{{scrollbar-width:thin;scrollbar-color:var(--primary) transparent}}
+.results-header{{text-align:center;padding:40px 20px;background:var(--bg-white);border-radius:20px;margin-bottom:20px;box-shadow:0 4px 20px rgba(0,0,0,.06)}}
+.results-icon{{font-size:80px;margin-bottom:20px}}
+.results-title{{font-size:28px;font-weight:700;color:var(--text-dark);margin-bottom:10px}}
+.results-score{{font-size:52px;font-weight:800;background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:10px}}
+.results-percentage{{font-size:20px;color:var(--text-light);font-weight:600}}
+.stats-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px;max-width:800px;margin-left:auto;margin-right:auto}}
+.stat-card{{background:var(--bg-white);padding:24px;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.06)}}
+.stat-icon{{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px}}
+.stat-icon.correct{{background:linear-gradient(135deg,var(--success) 0%,#38a169 100%);color:#fff}}
+.stat-icon.incorrect{{background:linear-gradient(135deg,var(--danger) 0%,#e53e3e 100%);color:#fff}}
+.stat-icon.unattempted{{background:linear-gradient(135deg,#a0aec0 0%,#718096 100%);color:#fff}}
+.stat-icon.negative{{background:linear-gradient(135deg,#ed8936 0%,#dd6b20 100%);color:#fff}}
+.stat-value{{font-size:32px;font-weight:700;color:var(--text-dark);margin-bottom:4px}}
+.stat-label{{font-size:13px;color:var(--text-light);font-weight:500}}
+.action-buttons{{display:grid;gap:12px;max-width:800px;margin:0 auto}}
+.action-btn{{width:100%;padding:18px;border:none;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .3s}}
+.action-btn.primary{{background:linear-gradient(135deg,var(--primary) 0%,var(--secondary) 100%);color:#fff}}
+.action-btn.secondary{{background:var(--bg-white);color:var(--text-dark);border:2px solid var(--border)}}
+.action-btn:hover{{transform:translateY(-2px)}}
+{_QUIZ_DESKTOP_CSS}
 </style>
 </head>
-<body class="theme-anime">
+<body>
 <div id="modeSelection">
 <div class="mode-container">
 <div class="mode-header">
 <div class="mode-header-icon"><i class="fas fa-graduation-cap"></i></div>
-<h2>erfrfer</h2>
+<h2>{quiz_name_esc}</h2>
 <p>Choose your preferred test mode</p>
 </div>
 <div class="mode-cards">
@@ -371,7 +1340,7 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 </div>
 <div class="timer-config">
 <label for="ct"><i class="fas fa-clock"></i> Custom Timer (minutes)</label>
-<input type="number" id="ct" class="timer-input" placeholder="Default: ${Math.round(qd.tt / 60)} minutes" min="1" max="300"/>
+<input type="number" id="ct" class="timer-input" placeholder="Default: {int(total_time / 60)} minutes" min="1" max="300"/>
 </div>
 <button class="start-btn" id="sb" disabled><i class="fas fa-play-circle"></i><span>Start Quiz</span></button>
 </div>
@@ -381,26 +1350,17 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 <div class="header-top">
 <div class="quiz-title">
 <i class="fas fa-clipboard-list"></i>
-<span class="quiz-title-text" title="erfrfer">erfrfer</span>
+<span class="quiz-title-text" title="{quiz_name_esc}">{quiz_name_esc}</span>
 <span class="mode-badge" id="mb"></span>
 </div>
 <div class="header-actions">
-<!-- Standalone TTS Controls -->
-<div style="display: flex; gap: 8px; font-size: 11px; align-items: center; color: var(--text-light); margin-right: 10px;">
-    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; user-select: none;">
-        <input type="checkbox" id="tts-read-q-p" style="accent-color: var(--primary);"> Q
-    </label>
-    <label style="display: flex; align-items: center; gap: 3px; cursor: pointer; user-select: none;">
-        <input type="checkbox" id="tts-read-exp-p" style="accent-color: var(--primary);"> Exp
-    </label>
-</div>
 <button class="theme-toggle" id="tt" title="Toggle Dark Mode"><i class="fas fa-moon"></i></button>
 <div class="timer-display" id="td"><i class="fas fa-clock"></i><span id="tt2">00:00</span></div>
 </div>
 </div>
 <div class="header-progress">
-<span id="pt">Question 1 of 100</span>
-<span id="at">Attempted: 0/100</span>
+<span id="pt">Question 1 of {n_questions}</span>
+<span id="at">Attempted: 0/{n_questions}</span>
 </div>
 <div class="progress-bar-container"><div class="progress-bar" id="pb"></div></div>
 </div>
@@ -408,10 +1368,6 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 <div class="nav-controls">
 <button class="nav-btn secondary" id="pv"><i class="fas fa-chevron-left"></i>Previous</button>
 <button class="nav-btn secondary" id="mk"><i class="fas fa-bookmark"></i>Mark</button>
-<!-- Lifelines Buttons -->
-<button class="nav-btn secondary" id="ll-5050" onclick="useLifeline('5050')" style="background: rgba(102,126,234,0.1); color: var(--primary); border-color: rgba(102,126,234,0.2);">🌓 50:50</button>
-<button class="nav-btn secondary" id="ll-poll" onclick="useLifeline('poll')" style="background: rgba(72,187,120,0.1); color: var(--success); border-color: rgba(72,187,120,0.2);">📊 Poll</button>
-<button class="nav-btn secondary" id="ll-double" onclick="useLifeline('double')" style="background: rgba(251,191,36,0.1); color: var(--warning); border-color: rgba(251,191,36,0.2);">2️⃣ Double</button>
 <button class="nav-btn primary" id="nx">Next<i class="fas fa-chevron-right"></i></button>
 <button class="nav-btn primary" id="sm" style="display:none"><i class="fas fa-paper-plane"></i>Submit</button>
 </div>
@@ -447,263 +1403,553 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,sans-serif;backgroun
 <button class="action-btn secondary" id="rsb"><i class="fas fa-redo"></i>Restart Quiz</button>
 </div>
 </div>
-
-<!-- Standalone Audience Poll Modal -->
-<div id="pollModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); backdrop-filter:blur(3px); z-index:99999; align-items:center; justify-content:center; padding:20px;">
-    <div style="background:var(--bg-white); border-radius:20px; padding:30px; max-width:400px; width:100%; box-shadow:0 10px 30px rgba(0,0,0,0.2); color:var(--text-dark);">
-        <h3 style="text-align: center; color: var(--primary); margin-bottom: 15px;"><i class="fas fa-chart-bar"></i> Audience Poll</h3>
-        <div id="pollBarsContainer" style="display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px;"></div>
-        <button class="nav-btn primary" onclick="document.getElementById('pollModal').style.display='none'" style="width:100%;">Close</button>
-    </div>
-</div>
-
 <script>
-const qd={"q":[{"id":0,"txt":"What does the phrase in the Preamble 'adopt, enact and give to ourselves this Constitution' best signifies?","ref":"","opts":["The Constitution of India is a sovereign document.","The Constitution derives its authority from the people of India.","The Constitution is not bound by any authority above it.","The Constitution is a self-executory document."],"ci":1,"exp":"Ex: The Preamble of the Constitution of India reflects the essence, values, and philosophy upon which the Constitution is founded. It begins with \\"We, the People of India, having solemnly resolved to constitute India into a Sovereign Socialist Secular Democratic Republic..\\" and ends with \\"adopt, ena ct and give to ourselves this Constitution.\\" The phrase \\" give to ourselves\\" signifies that the Constitution is not imposed by any external authority or monarch but is framed and adopted by the people of India themselves , acting through their elected representatives in the Constituent Assembly. It indicates that the ultimate sovereign power lies with the people, and the Constitution derives its legitimacy, authority, and provisions from the will of the people."},{"id":1,"txt":"Consider the following statements:\\n1. The powers between the Executive and Legislature are better compartmentalized in a Parliamentary system of Government than the Presidential system.\\n2. In both, the Presidential and Parliamentary system of Government, the executive responsible to the Legislature.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":3,"exp":"Ex: A Presidential system of Government entails the existence of an executive branch, which governs separately from the Legislature. The executive is not accountable to the Legislature. The Legislature, on the other hand, cannot, in normal circumstances, dismiss the executive. The Constitutional Government in the USA is taken as a classical example of the Presidential System of Government. A Parliamentary system is a form of Government where the head of Government derives their democratic legitimacy from their ability to command the support of a majority of the Legislature , to which they are accountable. The Constitutional Government in India and the United Kingdom (UK) are taken as examples of the Parliamentary Systems of Government. In the Parliamentary System , there is a fusion of powers between the Legislature and executive, as the executive (Council of Ministers) is drawn from and accountable to the Legislature. In the Presidential system (e.g., USA), there is a clear separation of powers. The executive (President and his cabinet) and Legislature function independently within their Constitutional domains. Therefore, the powers are more compartmentalized in the Presidential System, not the Parliamentary System. So, statement I is not correct. In the Parliamentary System, the executive is responsible to the Legislature and can be removed by a vote of no - confidence. In the Presidential system, the President holds office for a fixed term and cannot be removed by a legislative vote except through impeachment. So, statement II is not correct."},{"id":2,"txt":"Which of the following features of the Constitution of India are considered to be unitary in nature?\\n1. Written Constitution\\n2. Integrated judiciary\\n3. Single citizenship\\n4. Requirement of special majority for Constitutional Amendment\\n5. Bicameralism in the Central Legislature\\nSelect the correct answer using the code below:","ref":"","opts":["II and III only","I, III and IV only","II, III and IV only","I and V only G S T est – 02 – Polity ( V 7702)"],"ci":0,"exp":"Ex: In a Unitary System of Government , the Government of the State may or may not have local subdivisions, where local authorities enjoy autonomy of their own but exercise such powers as are from time to time delegated to them by the National Government and it is competent on the National Gov ernment to revoke the delegate powers of any of the constituents at its will. On the other hand, in a Federal System , the constituent units or States, are not mere delegates or agents of the Federal Government, rather both the Federal and the State Governments draw their authority from the same source viz. the Constitution of the land. Neither the component States have the right to secede from the federation at will, nor the Federal Government can assume or interfere in the spheres reserved for the State Government. The Constitution of India, is framed in a quasi - federal manner, that is it has features of both the Unitary and the Federal Governments. Federal features Unitary Features Dual Government (that is National ● Strong Centre and the State Government ● Single Constitution Bicameralism – Existence of Rajya ● Single Citizenship Sabha and the Lok Sabha ● Office of Governor at the State Division of Powers – Union and the ● Existence of All India Services State list ● Integrated Judiciary Independent Judiciary ● Greater powers to the Centre for Rigid Constitution amending the Constitution An integrated judiciary implies that both the Central and State laws are interpreted and enforced by a single unified judicial system headed by the Supreme Court. This is a unitary feature since, in a pure federation, there would be separate judicial systems for the Union and the States. So, point II is correct. Single citizenship means that all Indians are citizens of India only, irrespective of the State in which they reside. This reflects the unitary character, unlike federal systems where dual citizenship may exist (e.g., USA). So, point III is correct. A written Constitution is a feature of federal systems , as it defines and limits the powers of various organs of the State. In a Federal Government a written Constitution is a must, while in Unitary Government it may or may not. Also, the Federal Government ensures the supremacy of the Constitution, while in the Unitary Government the Constitution may be Supreme or not Supreme. So, point I is not correct. The requirement of a special majority for Constitutional Amendments adds to the rigidity of the Constitution, the more rigid the Constitution is, the more federal in nature. Therefore, the requirement of Constitutional Amendment being more difficult than in comparison to normal legislative process can be taken to as a federal feature. So, point IV is not correct. Bicameralism (Lok Sabha and Rajya Sabha) is a federal feature since it gives representation to the States at the Central level. So, point V is not correct."},{"id":3,"txt":"Consider the following statements regarding the Preamble to the Constitution of India:\\n1. The Constitution of India is the first written Constitution in the world with a Preamble.\\n2. Since the adoption of the Constitution, the Preamble has been only amended once, by the 42nd Constitutional Amendment Act, 1976.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":1,"exp":"Ex: The Preamble to the Constitution of India acts as a summary of the guiding principles and core values upon which the Constitution is based. It declares India to be a Sovereign, Socialist, Secular, Democratic Republic and sets out objectives such as Justice , Liberty, Equality, and Fraternity. While the Indian Constitution is among the most comprehensive and detailed written Constitutions in the world, it is not the first written Constitution with a preamble. The Constitution of the United States, adopted in 1789, predates India’s Constitution and contains a Preamble in the form of ‘Declaration of Independence’. So, statement I is not correct. Since its adoption on January 26, 1950, the Preamble has been amended only once , by the 42nd Constitutional Amendment Act in 1976 . This amendment added three new words to the Preamble: “Socialist”, “Secular”, and “Integrity.” These additions were made during the Emergency period under Prime Minister Indira Gandhi’s Government. No other changes have been made to the Preamble since then. So, statement II is correct."},{"id":4,"txt":"Consider the following statements:\\n1. A State Legislature can recommend the changing the name of the State to the President\\n2. The resolution to change the name of a State is to be first passed in the Rajya Sabha, before it could be presented in the Lok Sabha. is\\n3. Once passed by the Parliament, the President needs to send the same to the State Legislature for its opinion.\\nHow many of the above statements are correct?","ref":"","opts":["Only one","Only two","ll the three","None"],"ci":0,"exp":"Ex: The procedure for changing the name of a State is governed by Article 3 of the Constitution of India . It grants Parliament the power to change the name, area, or boundaries of any State. The process of changing the name of the State can also begin in the State Legislature , where it can recommend to the President to initiate a Parliamentary process for the same. But, such a recommendation is not binding in nature. Therefore, it can be summed that the State Legislature only has a consultative role in this process. So, statement I is correct. For a bill related to changing the name of States though, there is no Constitutional requirement for the bill to be passed first in the Rajya Sabha . A bill for changing the name of a State is treated like any ordinary bill and can be introduced in either House of Parliament. It must be passed by a simple majority in both Houses. So, statement II is not correct. o The Upper House (Rajya Sabha) of the Parliament was conceptualised as a chamber for upkeeping the interest of States at the Central Legislature. Many of the legislations, which have subjects concerning the States like introduction of a new All India Servic e, legislations on the subject matter in List II (State List) of the Seventh Schedule etc. are needed to be introduced in the Rajya Sabha first. As per Article 3 of the Constitution before giving its prior recommendation for the bill to be presented in the Parliament, the President is Constitutionally required to send the bill to State legislature for consultation , who can give its opinion on the Bill within a specified period of time. This opinion is not binding on the President, and if no opinion is rendered in the specified time period, even then the bill stands to be presented in the Parliament. Once passed by both the houses of the Parliament, the President is in no obligation to refer the same to the State Legislature again, if or not any amendment is done to the bill in the Parliament. So, statement III is not correct. So, only one of the above statements are correct."},{"id":5,"txt":"Article 15 and Article 16 of the Constitution of India prohibits the State from discriminating against the Citizens on certain grounds. In this context, consider the following:\\n1. Religion\\n2. Descent\\n3. Race\\n4. Place of Birth\\n5. Sex\\n6. Residence\\nHow many of the above are mentioned in both Article 15 and Article 16 as prohibitory grounds for discrimination?","ref":"","opts":["Only three","Only four","Only five","ll the six"],"ci":1,"exp":"Ex: Article 15 of the Constitution of India provides that “The State shall not discriminate against any citizen on grounds only of religion , race, caste, sex , place of birth or any of them.” Article 16 of the Constitution of India provides that the “No citizen shall, on grounds only of religion, race, caste, sex, descent, place of birth , residence or any of them, be ineligible for, or discriminated against in respect of, any employment or office under the State.” Article 15 Article 16 Religion. So, point I is correct Race. So, point III is correct. Caste Place of Birth. So, point IV is correct. Sex. So, point V is correct. Descent. So, point II is not correct. Residence. So, point VI is not correct. So, only four of the above grounds are mentioned in both Article 15 and Article 16 as prohibitory grounds for discrimination."},{"id":6,"txt":"Arrange the following offices of the British Constitutional setup in India in chronological order of their formation:\\n1. Secretary of State for India\\n2. Court of Directors\\n3. Chamber of Princes\\n4. Board of Control\\nSelect the correct answer using the code given below:","ref":"","opts":["I - II - IV - III","IV - II - III - I","III - I - IV - II","II - IV - I - III"],"ci":3,"exp":"Ex: Court of Directors (1600 – 1858) Established Under the Charter of 1600 granted by Queen Elizabeth I to the British East India Company to manage both the commercial and political affairs of the Company in India and abroad. The Court of Directors was the chief administrative and policy - making body of the East India Company. It was composed of 24 members, elected annually by the shareholders of the Company. The main functions of the Court of directors include controlling trade, appointing governors, and issuing administrative orders. It was abolished by the Government of India Act of 1858 which brought an end to company rule and political power was transferred from the East India Company to the British Crown. Board of Control (1784 – 1858) It was established Under the Pitt’s India Act, 1784 , to regulate Company rule. It introduced the concept of dual control (also known as double Government ) where the Board of Control represented the British Government and the Court of Directors represented the East India Company . The Board was composed of the Chancellor of the Exchequer , Secretary of State , and four Privy Council members . It supervised civil, military, and revenue affairs of the Company, but did not interfere in its commercial activities. It was abolished in 1858 by the Government of India Act, 1858 and its powers were transferred to the Secretary of State for India . Secretary of State for India (1858 – 1947) It was established under the Government of India Act, 1858 after the Revolt of 1857 , when governance of India was transferred from the East India Company to the British Crown . The Secretary of State was a British Cabinet minister and became the Supreme authority for Indian affairs. It was assisted by the Council of India (15 members, mostly retired Company officials). The Secretary of State delivered his functions through the Governor General of India, renamed as Viceroy of India. All communications between the British Government and India passed through this office. Controlled all branches of the Indian Government — civil services, legislation, and budgeting — from London. The office was dissolved as India and Pakistan became independent dominions with the Indian Independence Act of 1947 . Chamber of Princes (1921 – 1947) It was established under the Government of India Act, 1919 (Montagu - Chelmsford Reforms) in 1921 by the Duke of Connaught . It was created to provide a platform for princely States to express their views to the British Crown. It aimed to counterbalance the growing influence of Indian nationalist movements and to maintain princely loyalty to the British. It functioned as an advisory and consultative body , but had no legislative power . Membership was extended to around 120 princes , either directly or through representation . The Instrument of Accession signed by most Princely States with India or Pakistan led to its dissolution as it became irrelevant after Indian independence in 1947. So, the correct chronological order is Court of Directors – Board of Control – Secretary of State for India – Chamber of Princes."},{"id":7,"txt":"The ‘Citizenship Act of 1955’ has been amended\\nhow many times since January 01st 1985?","ref":"","opts":["Four","Five","Six","Seven"],"ci":3,"exp":"Ex: The subject of Citizenship is enumerated in the List I of the Seventh Schedule of the Constitution of India , hence the Central Legislature of the Union of India has exclusive powers to legislate on the matters dealing with Citizenship. Further, Article 10 and Article 11 of the Part II of the Constitution, explicitly confers it on the Parliament to frame laws regarding acquisition, repeal and termination related to Indian citizenship. Accordingly, in 1955 the Citizenship Act was passed by the Parliament which contained elaborated and encompassing provisions related to Indian citizenship . Later, some of the archaic provisions which became a part of Indian Citizenship laws as a corollary to the erstwhile colonial rule were repealed and amended via the Citizenship (Amendment) Act, 1957 and the Repealing and Amending Act, 1960, since then the Citizenship Act, 1955 has been the sole legislation dealing with the aspects of Citizenship in India. Since then the law has been amended seven times to incorporate various provisions, which emerges as per the needs of the time: Various Citizenship Amendment Acts (CAA) over the years (after 01 January 1985) : Amendment Background Provision Act 1. CAA, 1985 ● Citizen upsurge in Assam ● It gave a new cut off date against the migrants who for the grant of migrated to the State citizenship, for the from the erstwhile East Assam region. Pakistan during the ● It provided for a leeway Pakistani army crackdown period for migrants to be on civilians granted citizenship but not the right to vote. 2. CAA, 1986 ● To curb the grant of ● It provided that Indian citizenship to children of citizenship by birth can illegal migrants. Effectively be provided to children this was the year where born in India after July 1, the principle of jus solis 1987, only if either of started to get curbed and his/her parents was an the principle of jus Indian citizen at the time sanguinis came to the fore. of its birth. 3. CAA, 1992 ● Curbing the citizenship to ● A person born outside certain illegal migrants India after December 10, 1992 shall be a citizen of India by descent, only if his father is a citizen of India at the time of his birth. 4. CAA, 2003 ● A part of controlling the ● Children born after 03 population of India, and December 2004 are curbing the grant of Indian considered citizens of citizenship to children of India only if both of their illegal migrants parents were citizens of India or one of whose parents is a citizen of India and the other is not an illegal migrant at the time of their birth. 5. CAA, 2005 ● Statutory recognition to ● Facilitated the the status of Persons of registration of Overseas Indian Origin (PIO) and Citizens of India (OCI) Overseas Citizen of India and to reduce the residency requirement for OCI holders seeking Indian citizenship. It also broadened the definition of \\"Indian origin\\" for OCI eligibility and extended OCI benefits to citize ns of all countries, excluding Pakistan and Bangladesh, who met specific criteria. 6. CAA, 2015 -- ● Subsumed the PIO and OCI statuses to a common nomenclature scheme OCI cardholders. 7. CAA, 2019 ● Granting citizenship for ● It provides for an persons belonging to accelerated pathway for religious minorities facing the citizenship of the oppression in the members of six countries sharing land communities (Hindus, borders with India Sikhs, Buddhists, Jains, Parsis, and Christians) from Pakistan, Bangladesh, and Afghanistan if they have arrived before December 31, 2014. So, the Citizenship Act, 1955 has been amended seven times since 1 January 1985"},{"id":8,"txt":"Consider the following grounds for restrictions on the freedom of speech and expression in India:\\n1. Sovereignty and Integrity of India\\n2. Public Order\\n3. Morality\\n4. Contempt of Court\\nHow many of the above grounds were part of the original Constitution of India as promulgated on 26 th January 1950?","ref":"","opts":["Only one","Only two","Only three","ll the four G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: The Right to freedom of speech and expression is guaranteed by the Constitution of India via the Article 19(1)(a) enshrined in Part III of it. This right as conceptualised in the Constitution is not absolute and reasonable restrictions on specified grounds can be applied to it. In the original Constitution as promulgated on 26 January 1950, Article 19 provides for only defamation, contempt of Court and morality as the grounds restrictions on the Right of freedom of speech and expression. Later via the First Constitutional Amendment Act, 1951 and the Sixteenth Constitutional Amendment Act, 1963 the Article 19 was amended to add additional grounds for the restriction: Original Constitution First Amendment Act Sixteenth Amendment Act Defamation ● Public Order. So, ● Sovereignty and Contempt of point II is not Integrity of India. Court. So, point IV correct. So, point I is not is correct ● Incitement to an correct. Decency or offence Morality. So, point ● Friendly relations with III is correct. Foreign States Security of the State So, only two of the above mentioned grounds were part of the original Constitution of India as promulgated on 26 January 1950. Knowledge Box The 16 Amendment Act, 1963: In 1963, Article 19(2) was amended for the last time , and the words ‘ Sovereignty and Integrity of India were inserted in it . The bill was thought to be necessary because the words ‘Security of the State’ in Article 19(2) were considered insufficient to prevent a person from using the electoral process to advocate succession peacefully. Through this Amendment, the Third Schedule was also amended to include the oath for Candidates for Lok Sabha, Rajya Sabha and the State Legislature. The Act also amended the then oath of Member of Parliament and State Legislatures to include the words ‘Uphold the Sovereignty and Integrity of India’ The oaths for Supreme Court and High Court judges were also amended and the above phrase was added to their oath too."},{"id":9,"txt":"Consider the following pairs: Provision in the Source Constitution of Constitution it India is taken from\\n1. Method of Election Australia\\nof the President\\n2. Vesting of residuary Canada powers with the Centre\\n3. Concurrent List Ireland\\n4. Election of members South Africa of Rajya Sabha\\nHow many of the above given pairs are correctly matched?","ref":"","opts":["Only one","Only two","Only three","ll the four"],"ci":1,"exp":"Ex: The framers of the Constitution of India, whilst drafting the Constitution, referred to almost all the major contemporary Constitutions at that time and incorporated features of many of them in the draft Constitution. Some of the major features borrowed from the major Constitution are: Method of Election of the President: The method of indirect election of the President of India by an electoral college comprising elected members of both Houses of Parliament and of the Legislative Assemblies of the States is borrowed from the Irish Constitution . So, pair I is not correctly matched. Vesting of residuary powers with the Centre: In most classical federations like the USA, residuary powers are vested with the States. But in India, residuary powers are vested with the Centre, which is similar to the Canadian model of federalism. So, pair II is correctly matched. Concurrent List: The concept of a concurrent List, where both the Centre and the States can legislate on the same subject, is inspired by the Australian Constitution. So, pair III is not correctly matched. Election of members of Rajya Sabha: The procedure for the election of members of the Rajya Sabha was adopted from the Constitution of South Africa. So, pair IV is correctly matched. So, only two of the above pairs are correctly matched. Knowledge Box"},{"id":10,"txt":"Consider the following statements about the Directive Principles of State Policy and Fundamental Rights:\\nStatement I: Fundamental Rights given in Part III of the Constitution cannot be amended for the implementation of Part IV of the Constitution.\\nStatement II: The amending power of the Parliament under Article 368 of the Constitution is limited.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement–II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":3,"exp":"Ex: The relationship between Fundamental Rights (Part III) and Directive Principles of State Policy (Part IV) has been a subject of Constitutional debate, especially in the context of Parliament's power to amend the Constitution. Across Constitutional years, there have been varying judgements and subsequent parliamentary amendments to address the same. Champakam Dorairajan vs the State of Madras, 1951 If in conflict between the Directive Principles of State Policy and Directive Principles of State Policy are subsidiary to Fundamental Rights, the latter would prevail Fundamental Rights. I. C. Golaknath & Ors vs State Of Punjab, 1967 The Fundamental Rights could not be amended for the implementation of Fundamental Rights are sacrosanct in nature and the Directive Principles of State Policy, the term 'law' as enshrined in Article 13 authority of Parliament to amend the Constitution doesn't includes Constitutional Amendments as well exctend to them. The Twenty fourth Constitutional Amendment Act, 1971 Nothing in Article 13 applies to any amendment done under the The Parliament under Article 368 can amend any or all of the Article 368 of the Constitution. Fundamental Rights as given in Part III of the Constitution . The Twenty fifth Constitutional Amendment Act, 1971 Added Article 31C - Any law made to give effect to Article 39(b) and Article Parliament can amend any provision of the Part III of the Constitution 39(c) of Part IV, shall not be put into question in any court of India, on the Acts for the implementation of Article 39(b) and 39(c) beyond the basis of it beiong violative of Article 14, 19 and 31 scope of judicial review Kesavananda Bharati Sripadagalvaru vs State Of Kerala, 1973 Adopted the Basic Structure Doctrine The Parliament can amend any provision of the Part III of the Upheld the Constitutional validity of Article 31C, but made it subjected to Constition, but the same is subjected to Judicial Review and cannot Juducial Review infringe on the Basic Structure of the Constitution. The Fourty second Constitutional Amendement Act, 1976 Article 31C was extended to de all the Directive Principles, and no Parliament for the purpose of implementing any of the Directive Principles can amend any Fundamental Righs, and no court can judicial review was applicable on the same. declare it invalid. Minerva Mills Ltd. & Ors vs Union Of India, 1980 Extension of Article 31C to all Directive Principles were declared invalid. The position prior to that of the 42nd Constitutional Fundamental Rights conferred by Article 14 and 19 were accepted as SUBORDINATE to Amendment was restored. the Directive Principles enshrined in Article 39(b) and 39(c) Present Position The Fundamental Rights can be amended for the purpose of implementing Directive Principles of the State Policy, but the same cannot be violative of the Basic Structure of the Constitution and will br subjected to Judicial Review Parliament has amended Fundamental Rights multiple times to implement certain Directive Principles. For example: o The 25th Amendment Act, 1971 (Article 31C) curtailed the scope of Fundamental Rights under Articles 14, 19 to give effect to certain DPSPs. o The 42nd Amendment Act, 1976 tried to extend this protection to all DPSPs, but this was struck down in the Minerva Mills case (1980). The Kesavananda Bharati case (1973) held that Parliament can amend Fundamental Rights but not in a way that violates the basic structure of the Constitution. So, statement I is not correct. In the same Kesavananda Bharati case, the Supreme Court laid down the Basic Structure Doctrine, declaring that Parliament’s amending power under Article 368 is wide but not unlimited . It cannot be used to alter or destroy the essential features of the Constitution such as judicial review, secularism, federalism, and Fundamental Rights. The Basic Structure Doctrine is taken to be the only limitation to the amending powers of the Parlia ment. So, statement II is correct. So, Statement I is not correct but Statement II is correct."},{"id":11,"txt":"Consider the following statements with regard to the Directive Principles of State Policy (DPSP):\\n1. The Parliament and the State Legislatures are legally bound to implement the directives mentioned in Part IV of the Constitution.\\n2. It is compulsory for the Governor of a State to reserve a State bill for the consideration of the President, if it violates any of the DPSP.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":3,"exp":"Ex: The Directive Principles of State Policy (Part IV, Articles 36 - 51) provide guidance to the State in policy formulation but are not enforceable by any Court. DPSPs are non - justiciable as per Article 37. This means that neither the Center nor the States are legally bound to implement these principles . They serve as moral and political obligations for the Legislature and the executive but are not enforceable through the Courts. Hence, Legislatures are not legally obligated to implement them. So, statement I is not correct. The Constitution empowers the Governor of a State to reserve bills for the President’s consideration under Article 200, but it does not make reservation mandatory on the ground that the bill violates DPSPs . Reservation is generally used for bills that may conflict with Central laws, affect national interests, or involve Constitutional matters. So, statement II is not correct."},{"id":12,"txt":"With reference to the amendment to the Constitution of India, consider the following statements:\\nStatement I: A Constitutional Amendment can be challenged in a Court of law for being violative of the Fundamental Rights.\\nStatement II: Article 13 declares that laws that are inconsistent with any of the Fundamental Rights shall be void.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: Article 13 of the Constitution of India declares that all laws that are inconsistent with or in derogation of any of the Fundamental Rights shall be void. Such laws can be challenged in the Court on the ground of violation of Fundamental Rights. The term ‘law’ in Article 13 includes the following: Permanent laws enacted by the Parliament or the State Legislatures; Temporary laws like ordinances issued by the President or the State Governors; Statutory instruments in the nature of delegated legislation (executive legislation) like order, bye - law, rule, regulation or notification; and Non - legislative sources of law, that is, custom or usage having the force of law. Article 368 says that “nothing in Article 13 shall apply to any amendment made under this Article.” Article 13 says that “Nothing in this Article shall apply to any amendment of this Constitution made under Article 368.” The 24th Amendment Act of 1971 provided that nothing in Article 13 shall apply to any amendment of this Constitution made under Article 368. Thus, a Constitutional Amendment Act does not fall within the definition of ‘law’ under Article 13 of the Constitution. So, statement II is correct. The Supreme Court in the Keshavananda Bharati judgement, 1973 said that no amendment can infringe on the Basic Structure Doctrine, any act including a Constitutional Amendment amending any part of Fundamental Rights is not immune to Judicial Review for being violative of Basic Structure Doctrine. So, statement I is correct. So, both Statement – I and Statement – II are correct, but Statement – II does not explain Statement – I."},{"id":13,"txt":"With reference to the acquisition of citizenship in India, consider the following statements:\\n1. Citizenship by birth is exclusively governed by the principle of Jus Solis .\\n2. All applicants seeking citizenship under naturalization must be resident of India for the last 15 years.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":3,"exp":"Ex: In India, the Citizenship Act of 1955 provides for acquisition and loss of citizenship after the commencement of the Constitution. The Citizenship Act of 1955 prescribes five ways of acquiring citizenship, viz, birth, descent, registration, naturalisation and incorporation of territory. Citizenship Acquisition by Birth: In India, a person can acquire citizenship by birth, if A person born in India on or after January 26, 1950 but before July 1, 1987 is a citizen of India by birth irrespective of the nationality of his parents. A person born in India on or after July 1, 1987 is considered as a citizen of India only if either of his parents is a citizen of India at the time of his birth. Further, those born in India on or after December 3, 2004 are considered citizens of India only if both of their parents are citizens of India or one of whose parents is a citizen of India and the other is not an illegal migrant at the time of their birth. In the recent past, India has moved away from jus solis to jus sanguinis principle of citizenship . Jus solis means birthright based on birth on the soil of a country. Jus sanguinis means birthright based on blood, descent, heritage or race. In India, the move from jus solis to jus sanguinis conceptions of citizenship first occurred after turmoil in Assam in the 1980s over refugee and migrant inflows from Bangladesh. The 1986 and 2003 amendments to the Citizenship Act indicated a move towards the narrow principle of jus sanguinis or blood relationship . So, statement I is not correct . Citizenship by Naturalization: The general requirement is that an applicant must have resided in India for 11 years out of the previous 14 years. These 11 years are preceding the period of 12 months immediately preceding the date of the application. A person needs to reside in India thr oughout the period of twelve months immediately preceding the date of the application. However, the Citizenship (Amendment) Act, 2019 creates an exception for Hindus, Sikhs, Buddhists, Jains, Parsis and Christians from Afghanistan, Bangladesh and Pakistan, with regard to this qualification. For these groups of persons, the 11 years’ requirement has been reduced to five years. So, statement II is not correct. Citizenship by Registration: As per the current citizenship laws in India, there are certain categories of foreigners, for whom the facility for acquisition of citizenship is possible by registering themselves or being registered on their behalf with the Central Government. It must be noted that the Act allows only certain categories of foreigners to acquire Indian citizenship, but not just any foreigner. The Central Government may register as a citizen of India any person (not being an illegal migrant) if he belongs to any of the following categories: ■ a person of Indian origin who is ordinarily resident in India for seven years ■ a person of Indian origin who is ordinarily resident in any country or place outside undivided India; ■ a person who is married to a citizen of India and is ordinarily resident in India for seven years ■ minor children of persons who are citizens of India; ■ a person of full age and capacity whose parents are registered as citizens of India; ■ a person of full age and capacity who, or either of his parents, was earlier citizen of independent India ■ a person of full age and capacity who has been registered as an overseas citizen of India cardholder for five years Knowledge Box Citizenship Amendment Act, 2019: Definition of illegal migrants: The Act prohibits illegal migrants from acquiring Indian citizenship. It defines an illegal migrant as a foreigner: (i) who enters India without a valid passport or travel documents, or (ii) stays beyond the permitted time. Exceptions: The Act provides that that the Hindus, Sikhs, Buddhists, Jains, Parsis and Christians from Afghanistan, Bangladesh and Pakistan, who entered India on or before December 31, 2014, will not be treated as illegal migrants. For this they are exempted from the Foreigners Act, 1946 and the Passport (Entry into India) Act, 1920. Citizenship by registration or naturalisation: The Act creates an exception for Hindus, Sikhs, Buddhists, Jains, Parsis and Christians from Afghanistan, Bangladesh and Pakistan, with regard to this qualification. For these groups of persons, the 11 years’ requirement is reduced to five years. These provisions on citizenship for illegal migrants are not applied to the tribal areas of Assam, Meghalaya, Mizoram, and Tripura, included in the Sixth Schedule to the Constitution. These tribal areas include Karbi Anglong (in Assam), Garo Hills (in Megh alaya), Chakma District (in Mizoram), and Tripura Tribal Areas District. Further, it does not apply to the “Inner Line” areas notified under the Bengal Eastern Frontier Regulation, 1873. In these areas, visits by Indians are regulated through the Inner L ine Permit. Cancellation of registration of OCIs: The Act adds one more ground for cancelling registration, that is, if the OCI has violated the provisions of the Act or of any other law as notified by the Central Government. The orders for cancellation of OCI should not be passed till the OCI cardholder is given an opportunity to be heard."},{"id":14,"txt":"Amendment to which of the following mentioned provisions, will require ratification by at least half\\nof the State Legislature?\\n1. Distribution of seats in Rajya Sabha\\n2. Fundamental Rights\\n3. Seventh Schedule of the Constitution\\n4. First Schedule of the Constitution\\nSelect the correct answer using the code given below:","ref":"","opts":["I, III and IV only","II and IV only","I and III only","I, II and III only"],"ci":2,"exp":"Ex: As per Article 368 of the Constitution of India an Amendment of the Constitution of India may be initiated only by the introduction of a Bill for the purpose in either House of Parliament. (Some provisions of the Constitution can be amended by a simple majority of the Parliament in the manner of ordina ry legislative process. But these amendments do not come under Article 368.) Article 368 provides for two types of amendments: Some provisions can be amended by a special majority of both the houses of the Parliament (a two - third majority of the members of each House present and voting, and a majority of the total membership of each House.) Examples include provisions of Fundamental Rights under Part III and Directive Principles of State Policy under Part IV of the Constitution. ■ Thus, an Article of Part III of the Constitution can be amended only by special majority of both the houses of the Parliament. It does not require ratification by half of the States. So, point II is not correct. Some other provisions can be amended by a special majority of the Parliament and with the ratification by at least half of the total States . Article 368 (2) provides that a Constitutional Amendment Bill needs to be passed in each House by a majority of the total membership of that House and by a majority of not less than two - thirds of the members of that House present and voting. Article 368 (2) further says that if such amendment seeks to make any changes in the following, then the amendment shall also require to be ratified by the Legislatures of not less than one - half of the States by simple majority: Article 54, Article 55, Article 73, Article 162 or Article 241, or Chapter IV of Part V, Chapter V of Part VI, or Chapter I of Part XI, or the representation of States in Parliament . So, point I is correct. any of the Lists in the Seventh Schedule. So, point III is correct. the provisions of this Article (i.e. 368). The First Schedule of the Constitution consists of provisions related to the names of States and the Union Territories, along with their extent and territorial jurisdiction. Any change to this schedule will not require an Amendment under Article 368 of the Constitution. So, point IV is not correct."},{"id":15,"txt":"Which of the following related to the Preamble to the Constitution of India is correct?","ref":"","opts":["It acts as a restriction upon the powers of the Legislature to amend the Constitution.","It is a summary of the Constitutional principles but is not a part of the same.","It was enacted after the rest of the Constitution was already enacted.","The Parliament through normal legislative process can amend the Preamble in whole or any part of it."],"ci":2,"exp":"Ex: The Preamble to the Constitution of India acts as a summary statement to the Constitutional values, it embodies the basic philosophy and fundamental values - political, moral and religious - on which the Constitution is based. The Supreme Court earlier in the Keshavananda Bharati Case of 1973 stated that the Preamble is neither a source of power to the Legislature nor a prohibition upon the powers of Legislature. So, option a is not correct. The Preamble acts as a summary statement to the Constitutional principles and was included as a part of the Constitution , this was further reiterated by the Apex Court in the Keshavananda Bharati and the LIC of India case, 1995 . So, option b is not correct. Like any other part of the Constitution, the Preamble was also enacted by the Constituent Assembly but, after the rest of the Constitution was already enacted. The reason for inserting the Preamble at the end was to ensure that it was in conformity with the Constitution as adopted by the Constituent assembly. So, option c is correct. Preamble is amendable as a whole but the same amendment should not be disruptive of the Basic Structure of the Constitution , and many of the principles such as Secularism, Democratic etc. are a part of the Basic Structure Doctrine. So, option d is not correct."},{"id":16,"txt":"Which of the following safeguards are provided to an individual under Article 20 of the Constitution of India?\\n1. A person arrested for any offence must be produced before a magistrate within 24 hours of his arrest.\\n2. A person must be informed of the grounds of his arrest.\\n3. A person accused of any offence cannot be compelled to testify against himself.\\n4. Any person cannot be punished for more than once for the breach of any criminal law.\\nSelect the correct answer using the code given below:","ref":"","opts":["I, III and IV only","II and IV only","III and IV only","I and III only"],"ci":2,"exp":"Ex: Article 20 of the Constitution of India guarantees protection in respect of conviction for offences. It provides for three rights: No person shall be convicted of any offence except for violation of a law in force at the time of the commission of the Act charged as an offence, nor be subjected to a penalty greater than that which might have been inflicted under the law in force at the time of the commission of the offence. ( No ex - post - facto law ) ■ An ex - post - facto law is one that imposes penalties retrospectively. The enactment of such a law is prohibited by the first provision of Article 20. However, this limitation is imposed only on criminal laws and not on civil laws or tax laws. Article 20 prohibits self - incrimination. It says that no person accused of any offence shall be compelled to be a witness against himself. So, statement III is correct. The protection against self - incrimination extends to both oral evidence and documentary evidence. However, it does not extend to (i) compulsory production of material objects, (ii) compulsion to give thumb impression, specimen signature, blood specimens, and (iii) compulsory exhibition of the body . Further, it extends only to criminal proceedings and not to civil proceedings. Article 20 prohibits double jeopardy. It provides that a person shall not be prosecuted and punished for the same offence more than once . So, statement IV is correct. The rule of double jeopardy has a plethora of definitions attached to it and finds its roots in the English Common law rule of ’Nemo debet via Vexan’ meaning ‘a man must not be put into peril twice for the same offence’, essentially aiming to prevent a person from being punished twice for the same offence. Article 22 grants protection to persons who are arrested or detained. The first part of Article 22 confers the following rights on a person who is arrested or detained under an ordinary law: Right to be informed of the grounds of arrest. So, statement II is not correct. Right to consult and be defended by a legal practitioner. Right to be produced before a magistrate within 24 hours, including the journey time. So, statement I is not correct. Right to be released after 24 hours unless the magistrate authorises further detention."},{"id":17,"txt":"Consider the following rights:\\n1. Right against the adverse impact of climate change\\n2. Right to Livelihood\\n3. Right to Privacy\\n4. Right to Broadcast\\n5. Right to Strike\\nHow many of the above have been established to be an intrinsic part of the Right to life and personal liberty under Article 21 of the Constitution of India?","ref":"","opts":["Only two","Only three","Only four","ll the five G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: Article 21 of the Constitution of India provides for protection of life and personal liberty . It says that no person shall be deprived of his life or personal liberty except according to procedure established by law. The Supreme Court has held that th e ‘right to life’ as embodied in Article 21 is not merely confined to animal existence or survival but it includes within its ambit the right to live with human dignity and all those aspects of life which go to make a man’s life meaningful, complete and worth living. It has declared certain rights as part of Article 21. The Supreme Court in MJ Ranjitsinh versus the Union of India & ors, 2024 ruled that people have a “right to be free from the adverse effects of climate change.” The Supreme Court of India on April 5, 2024, for the first time, recognised the right against the adverse impacts of climate change, saying it is intertwined with the right to life and equality that are embedded in the Constitution of India. So, point I is correct. The judgment of the Supreme Court in the Olga Tellis vs Bombay Municipal Corporation (1985) established the Right to Livelihood as part of the Right to Life . The Court held that the Right to Life, conferred by Article 21, is wide and far reaching. It does not mean merely that life cannot be extinguished or taken away. An equally important facet of that right is the right to livelihood because no person can l ive without the means of living, that is, the means of livelihood. So, point II is correct. The Supreme Court of India's 2017 landmark ruling in the case Justice K.S. Puttaswamy (Retd.) and Anr. vs Union Of India And Ors, 2017 . established that the right to privacy is a fundamental right under Article 21 of the Constitution of India, and that it is an intrinsic part of the right to life and personal liberty. So, point III is correct. Article 19(1)(a) grants citizens the right to freely express their thoughts, opinions, and ideas. This includes the freedom to express oneself through speech, writing, printing, visual representations, or any other means. In Secretary, Ministry of Information and Broadcasting v. Cricket Association, Bengal, the Supreme Court held that broadcasting is a means of communication and a medium of speech and expression within the framework of Article 19(1)(a) . This case involved the rights of a cricket association to grant telecast rights to an agency of its choice. It was held that the right to entertain and to be entertained, in this case, through the broadcasting media are an integral part of the freedom under Article 19(l)(a). So, point IV is not correct. In T.K. Rangarajan v. Government of Tamil Nadu (2003), the Supreme Court held that the employees have no Fundamental Right to resort to strike. So, point V is not correct. So, only three of the above given rights have been established to be an intrinsic part of the Right to life and personal liberty under Article 21 of the Constitution of India."},{"id":18,"txt":"Consider the following statements about the Regulating Act of 1773:\\n1. The Governors of Bombay and Madras presidencies were made subordinate to the Governor General of Bengal.\\n2. The Governor General of Bengal was given overriding powers over the Executive council.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":0,"exp":"Ex: The Regulating Act of 1773 was the first major step by the British Parliament to regulate the affairs of the East India Company in India. It was passed in response to growing corruption, mismanagement, and financial crisis within the Company. The Act aimed to bring administrative reforms and establish parliamentary control over its operations. It laid the foundation for Centralized governance in India and marked the beginning of British Governmental intervention in Indian administration. The Act made the Governors of Bombay and Madras presidencies subordinates to the Governor General of Bengal, who was now assisted by an Executive Council of four members for the governance of Indian territories. So, statement I is correct. The Governor General - in - council was given the superintendence and control over the Presidencies of Madras and Bombay in matters of war and peace. Further, the Governors of these two presidencies were required to send the Governor General information concer ned with the matters of revenue and interest. The Governor General in turn, was under the control of Directors and kept the latter fully informed of Indian affairs. The Act established a four member council to aid and advise the Governor General , the decisions were to be taken by a majority vote, and the Governor General could be overruled by the council. The Governor General did enjoy a casting vote in case of a tie. The Governor - General could not unilaterally overrule the council’s majority decision . If most council members opposed his view, he was obligated to abide by their decision, regardless of personal disagreement. This setup reinforced the idea of collective decision - making , where outcomes were determined by majority vote. So, statement II is not correct. Later, when Lord Cornwallis became the Governor General of Bengal in 1783 , he was given powers via an amendment in 1786, that he could override the decisions of the council if he owned responsibilities of his decisions. Knowledge Box Key Provisions of the Regulating Act 1773: The Act established the office of the Governor - General of Bengal , with Warren Hastings as the first incumbent, to Centralize the administration of the East India Company in India. The Act provided for the establishment of a Supreme Court at Calcutta in 1774 , comprising a Chief Justice and three judges, to administer justice to British subjects. It prohibited Company servants from engaging in private trade or accepting gifts and bribes, in an effort to curb corruption. The Act marked the beginning of Parliamentary oversight over the Company, requiring it to report all civil, military, and revenue matters to the British Government."},{"id":19,"txt":"Consider the following statements:\\nStatement I: The Indian system of federalism is considered to be asymmetric in nature.\\nStatement II: The Constitution of India provides for special provisions for certain States.\\nStatement III: Some States have a numerically greater representation in the Rajya Sabha.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement II and Statement III are correct and both of them explain Statement I","oth Statement II and Statement III are correct but only one of them explains Statement I","Only one of the Statements II and III is correct and that explains Statement I","Neither Statement II nor Statement III is correct"],"ci":0,"exp":"Ex: Asymmetric federalism is understood to mean federalism based on unequal powers and relationships in political, administrative and fiscal arrangements spheres between the units constituting a federation. Asymmetry in the arrangements in a federation can be viewed in both vertical (between Center and States) and horizontal (among the States) senses. India is called an asymmetric federalism because various constituent States don’t have equal powers, with some having greater autonomy than others. So, statement I is correct. The Constitution under Part XXI provides for special provisions for certain States, which are not enjoyed by other states in general . Through this the Government is empowered to grant special status to some units providing them with special powers not enjoyed by other States. Asymmetry involves providing greater autonomy to some States when compared to others. It permits particular Sta tes to have greater executive, legislative and at times judicial powers to other States. For example, there are various clauses in Article 371 which accord special powers to North - Eastern States. These provisions have been introduced through amendments, typically at the time of conversion of a Union territory to a State, or in the case of Sikkim, after its accession to India. The safeguards provided to these States through these special provision s include respect for customary laws, religious and social practices, restrictions on the ownership and transfer of land, and restrictions on the migr ation of non - residents to the State. State Legislatures are typically given final control over changes in these provisions. So, statement II is correct. The Constitution of India, under its Fourth Schedule provides for unequal participation to constituent States in the Upper House (Rajya Sabha) of the Parliament, thus giving some States a greater say in the legislative process, this also contributes to the asymmetry in the federal structure of Government in India. So, statement III is correct. So, both Statement II and Statement III are correct and both of them explain Statement I."},{"id":20,"txt":"Consider the following statements:\\n1. Parliament has exclusive power to make laws with respect to any of the matters enumerated in Union List.\\n2. In case of conflict between Central and State laws over the subjects in Concurrent List it is the former that prevails, in regular legislative circumstances.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":2,"exp":"Ex: The Constitution of India under the Seventh Schedule provides for a threefold distribution of legislative subjects between the Union and the States through the Union List (List - I), State List (List - II) , and Concurrent List (List - III) , the latter consisting of subject matters on which both the Center and State Legislature can make laws. Article 246 of the Constitution of India provides that the Parliament has exclusive power to make laws with respect to any of the matters enumerated in List I in the Seventh Schedule. So, statement I is correct. Under Article 254 of the Constitution , when there is a conflict between a Central law and a State law on a subject enumerated in the Concurrent List, it is the former that prevails. The State law becomes void to the extent of repugnancy , unless it has received the President’s assent, in which case it can prevail in that State. However, even then, Parliament retains the power to override it later. So, statement II is correct."},{"id":21,"txt":"Which Central law on the subject matter of the State List will stand in perpetuity unless withdrawn or amended by the appropriate Legislature?\\n1. A law enacted based on the resolution passed by the Rajya Sabha\\n2. A law enacted during the President's rule\\n3. A law enacted during the National emergency under Article 352\\n4. A law promulgated for the implementation of international agreements and conventions\\nSelect the correct answer using the code given below:","ref":"","opts":["II and III only","I and IV only","II and IV only","I, III and IV only"],"ci":2,"exp":"Ex: The Constitution of India allows Parliament to legislate on matters in the State List under certain exceptional circumstances . The continuity of such laws depends upon the specific situation under which they were enacted. Article 249 of the Constitution provides that Parliament can legislate on matters in the State List if the Rajya Sabha passes a resolution supported by two - thirds of members present and voting , stating that it is necessary in national interest. Such a law remains in force as long as the resolution remains in force, which is for one year and can be extended further by one year at a time. Once the resolution ceases to operate, the law continues for six more months, after which it lapses. Thus, such laws are n ot permanent and cease unless the resolution is extended or the law is re - enacted. Therefore, these laws are temporary and not perpetual. So, point I is not correct. Under Article 356, during a Constitutional emergency (President’s Rule) , Parliament assumes the powers of the State Legislature and can make laws on subjects in the State List for that State. Laws made during the President's Rule do not automatically lapse after the emergency ends. They continue to be in force unless repealed, altered, or amended by the competent Legislature. Thus, these laws are of a permanent nature unless actively changed. Therefore, laws made during the President's Rule can stand for pe rpetuity. So, point II is correct. Article 352 deals with a national emergency. During its operation, Parliament can make laws on subjects in the State List for the entire country. However, any law made under this provision ceases to have effect six months after the emergency ends. These laws are therefore temporary in nature and are not permanent by default. Their continuation depends on the subsistence of the emergency and subsequent legislative action. Hence, these laws are not perpetual. So, point III is not correct. Article 253 empowers Parliament to make laws on any subject, including those in the State List, for implementing international treaties , agreements, or conventions. Such laws made for fulfilling international obligations do not depend on any time - bound resolution or emergency. They remain in force permanently unless repealed or amended by Parliament . Therefore, these laws stand for perpetuity by default. So, point IV is correct."},{"id":22,"txt":"Which one of the following provisions enables the Center to extend discretionary grants to States through Centrally Sponsored Schemes (CSS)?","ref":"","opts":["rticle 268","rticle 270","rticle 275","rticle 282 G S T est – 02 – Polity ( V 7702)"],"ci":3,"exp":"Ex: The Constitution of India under Chapter II of Part XII provides for both obligatory and discretionary financial grants from the Center to the States. Article 275 provides for statutory grants - in - aid from the Consolidated Fund of India to certain States as recommended by the Finance Commission . These grants are obligatory, rule - based, and form part of the Constitutional framework of fiscal federalism. Article 282, on the other hand, empowers both the Union and the States to make grants for any public purpose , even if the subject does not fall within their legislative competence. This provision enables the Center to extend discretionary grants to States through Centrally Sponsored Schemes (CSS) . These schemes are designed to achieve national priorities but are not obligatory. Their implementation is largely determined by the Center’s policy priorities rather than any Constitutional mandate. Knowledge Box Article 268 – Deals with duties levied by the Union but collected and appropriated by the States. Article 270 – Deals with taxes that are to be distributed between Center and States. Article 275 – Provides statutory grants to certain States, usually recommended by the Finance Commission"},{"id":23,"txt":"Which of the following statements is/are correct\\nwith reference to a Constitution Amendment Bill under Article 368?\\n1. It can be introduced in the Parliament only after the prior recommendation of the President.\\n2. It can be introduced by a Minister as well as by a private member of the House.\\n3. It is obligatory for the President to give her/ his assent to such a bill.\\nSelect the correct answer using the code given below:","ref":"","opts":["II only","II and III only","I and III only","I, II and III"],"ci":1,"exp":"Ex: Article 368 in Part XX of the Constitution of India deals with the powers of Parliament to amend the Constitution. It says that the Parliament may in exercise of its constituent power amend by way of addition, variation or repeal any provision of this Constitution. An amendment of the Constitution may be initiated only by the introduction of a Bill for the purpose in either House of Parliament. It does not require prior permission of the President for its introduction in the Houses of Parliament. So, statement I is not correct. A bill for the amendment of the Constitution can be introduced either by a Minister or by a private member. So, statement II is correct. The Constitution (Twenty - Fourth Amendment) Act, 1971 amended Article 368 to expressly stated that Parliament has power to amend any provision of the Constitution. The amendment further made it obligatory for the President to give his/her assent , when a Constitution Amendment Bill was presented to her. Thus, the President must give her assent to the bill. S/he can neither withhold her assent to the bill nor return the bill for reconsideration of the Parliament. So, statement III is correct."},{"id":24,"txt":"Consider the following pairs: Act Feature\\n1. Indian Councils Ordinance making Act, 1861 powers to the Viceroy\\n2. Government of Establishment of India Act, 1919 bicameral Legislature at Center\\n3. Indian Councils Establishment of an All Act, 1909 India Federation\\n4. Indian Councils Separation of Act, 1892 provincial budget from the Central budget\\nWhich of the above pairs are correctly matched?","ref":"","opts":["I and II only","II and III only","III and IV only","I and IV only"],"ci":0,"exp":"Ex: Ordinance making powers to the Viceroy: o The Indian Councils Act, 1861 restored legislative powers to the Viceroy. It empowered the Viceroy to issue ordinances in situations of emergency when the legislative council was not in session. So, pair I is correctly matched. o These ordinances held the same force as acts passed by the council , but they remained valid for six months from the date of promulgation. This was the first time such ordinance - making power was formally provided to the executive head of British India. Establishment of bicameral Legislature at Center: o The Government of India Act, 1919 , also known as the Montagu - Chelmsford Reforms , introduced a bicameral Legislature at the Central level for the first time . o The Central Legislature consisted of the Council of State (Upper House), and the Legislative Assembly (Lower House). This structure marked a shift towards a more representative system, though limited, under British rule. o The Act also introduced the system of dyarchy in the provinces , but its Central innovation was the creation of this bicameral arrangement . So, pair II is correctly matched. Establishment of an All India Federation: o The establishment of an All - India Federation was proposed by the Government of India Act, 1935 . It envisioned a federation consisting of British Indian provinces, and Princely States, which were autonomous under British control. o Key Provisions related to the federation includes: Voluntary Accession by Princely States: Princely states were not compelled to join. They could voluntarily accede by signing an \\"Instrument of Accession.\\" Division of Powers: Powers between the federal Government and units (provinces and States) were distributed through Federal List, Provincial List and Concurrent List. Bicameral Federal Legislature: The Act proposed a bicameral Legislature at the Center with Council of States (Upper House) and Federal Assembly (Lower House). Governor - General as Executive Head: The Governor - General retained overriding powers over defence, external affairs, and public safety. He could veto legislation, issue ordinances, and summon or dissolve the federal Legislature. o The All - India Federation never came into existence because most Princely States did not join the federation. So, pair III is not correctly matched. Separation of provincial budget from the Central budget: o The Government of India Act, 1919 introduced a significant change in India's fiscal structure. For the first time, it provided for the separation of provincial finances from the Central finances. o This meant that Provinces were given independent control over subjects in the Provincial List, and they could now prepare and pass their own budgets, separate from the Central Government. So, pair IV is not correctly matched."},{"id":25,"txt":"Consider the following statements with reference to Government of India Act, 1935:\\n1. The Governors of the Provinces were made subordinate and directly responsible to the Viceroy of India.\\n2. The Federal Legislature was empowered to move a No Confidence Motion in the Assembly.\\n3. The residuary powers were vested with the Federal Legislative Assembly.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I and II only","III only","I and III only","II only"],"ci":3,"exp":"Ex: The Government of India Act, 1935 was the largest and most comprehensive Constitutional reform introduced by the British in India before independence. It aimed to introduce provincial autonomy and proposed an all - India federation although the federal part never came into operation. The Actwas characterized by the stream of providing Provincial autonomy with many provisions facilitating the same, foremost being the abolition of dyarchy at the Provincial level, introduction of responsible Government at the provinces amongst others. The decentralization trend was underscored in the Act, with the Governors of the Province, who were earlier subordinated and directly responsible to the Viceroy, were now to be the crown’s nominee and representative to exercise authority on the crown’s behalf in a province, Provinces were also relieved from “the superintendence, direction” of the Secretary of State and Governor - General. So, statement I is not correct. For establishing responsible Governments the Federal Assembly was allowed to move a vote of No - Confidence against Ministers , and if passed, the Minister needed to resign. So, statement II is correct. In the 1935 Act, powers were divided between the Center and Provinces through three legislative lists such as Federal List (for Center), Provincial List (for Provinces) and Concurrent List (shared by both). The residuary powers residing with the Viceroy. So, statement III is not correct. Knowledge Box Other Provisions of the Government of India Act, 1935: o Federal Structure (Proposed but Not Implemented): The Act proposed an All - India Federation including British Indian Provinces , and Princely States (who could join voluntarily through an Instrument of Accession). However, since most princely states refused to join , the federation never came into being. o All - India Services: The Act provided for the establishment of Federal Public Service Commission , Provincial Public Service Commissions , and Joint Public Service Commissions . o Separate Electorates and Communal Representation: Continued and expanded the system of separate electorates for communities like Muslims, Sikhs, Indian Christians, Anglo - Indians, Europeans, and Scheduled Castes"},{"id":26,"txt":"In the context of judicial proceedings in India, the ‘Doctrine of Essentiality’ is usually applied to test the applicability of which of the following rights granted under the Constitution of India?","ref":"","opts":["Equality before Law","bolition of Untouchability","Right to Constitutional Remedies","Freedom to Manage Religious Affairs"],"ci":3,"exp":"Ex: The Doctrine of Essentiality or the Essential Religious Practices (ERP) doctrine governs which religious practices are protected under Articles 25 & 26 of the Constitution of India. Article 25 relates to freedom of conscience and free profession, practice and propagation of religion and Article 26 relates to freedom to manage religious affairs. The doctrine of \\"essentiality\\" was invented by a seven - judge Bench of the Supreme Court in the 'Shirur Mutt' case in 1954. The Court held that the term “religion” will cover all rituals and practices “integral” to a religion, and took upon itself the respo nsibility of determining the essential and non - essential practices of a religion. The doctrine asserts that only “essential” practices of a religion will be given Constitutional protection. The doctrine was evolved by the Court to protect only such religious practices which were essential and integral to the religion."},{"id":27,"txt":"Consider the following:\\n1. It must not be established by an Act of the Parliament or any State Legislature.\\n2. It must be administered by the minority community at all times.\\n3. It must not receive any financial aid from the Union or the State Governments.\\nHow many of the above parameters must be fulfilled by an educational institution to be recognized as a Minority institution under Article 30 of the Constitution of India?","ref":"","opts":["Only one","Only two","ll the three","None G S T est – 02 – Polity ( V 7702)"],"ci":3,"exp":"Ex: Article 30 of the Constitution of India guarantees the right of minorities to establish and administer educational institutions of their choice. It says that “All minorities, whether based on religion or language, shall have the right to establish and administer educational institutions of their choice.” For the purpose of determining the minority character of the institutions parameters were laid down by a 7 - judge bench of the Supreme Court in Dr. Naresh Agarwal versus the Aligarh Muslim University, 2024 case: The first test is to trace the genesis of the institution. For this analysis, the Courts must trace the origin of the idea for the establishment of the institution. The proof of ideation must point towards one member of the minority or the group from the community. The second test is to determine the purpose of establishing the institution. The Court must determine if the institution was established to further the interest of the minority community. The third test is tracing the steps taken towards the implementation of the idea. Who contributed the funds for the institution? How was the land obtained or donated? Who obtained the necessary permissions, and handled the construction and infrastructure? This seven - judge bench of the Supreme Court recently overruled its judgement in Azeez Basha v Union of India, 1967. In Azeez Basha, a five - judge bench had held that Aligarh Muslim University was not a minority institution as it was neither “established nor administered” by the Muslim community. It had held that an institution must be both “established” and “administered ” to qualify as a minority institution under Article 30 of the Constitution. In the recent judgement, the Court overruled the view taken in Azeez Basha Case that an educational institution is not a minority institution if it derives its legal character through a statute. The Court held that an institution's minority status shouldn’t be dismissed solely because it was created by law. So, statement I is not correct. The Court also said it is not necessary to prove that administration vests with the minority to prove that it is a minority educational institution. The test is whether the administration affirms the minority character of the institution. So, statement II is not correct. Earlier in Secretary of the Malankara Syrian Catholic College versus T. Jose, 2007 , the Supreme Court categorically held that extension of aid by the State does not alter the nature and character of the minority educational institute. So, statement III is not correct. So, none of the above parameters must be fulfilled by an educational institution to be recognized as a minority institution under Article 30 of the Constitution of India."},{"id":28,"txt":"In the context of Fundamental Rights, consider the following pairs: Action Violation of Fundamental Rights under\\n1. Denying entry to any Article 17 place of worship to a person belonging to Scheduled Castes\\n2. Preventing any person Article 15 from using water wells or bathing ghats constructed for public use\\n3. Denying admission to Article 29 any person to a State funded educational institution on the basis of his mother tongue\\n4. Forcibly making a Article 23 person to work on the fields of another person without being paid\\nWhich of the pairs given above are correctly matched?","ref":"","opts":["I, III and IV only","I and II only","II, III and IV only","I, II, III and IV"],"ci":3,"exp":"Ex: Article 17 of the Constitution of India provides for abolition of untouchability in India. It says that \\"untouchability is abolished and its practice in any form is forbidden. The enforcement of any disability arising out of untouchability shall be an offence punishable in accordance with law.” The Mysore High Court held that the subject matter of Article 17 is not untouchability in its literal or grammatical sense but the ‘practice as it had developed historically in the country’. It refers to the social disabilities imposed on certain classes of persons by reason of their birth in certain castes. The Protection of Civil Rights Act, 1955 has been enacted to prescribe punishment for the preaching and practice of “Untouchability”. Section 3 of this Act provides that if a person prevents any other person from entering any place of public worship which is open to other persons professing the same religion, then he shall be punishable with imprisonment and fine. Thus, denying entry to any place of worship w ould amount to violation of Article 17. So, pair I is correctly matched. Article 15 provides for prohibition of discrimination on grounds of religion, race, caste, sex or place of birth. Article 15 (2 ) says that ‘No citizen shall, on grounds only of religion, race, caste, sex, place of birth or any of them, be subject to any disability, liability, restriction or condition with regard to (a) access to shops, public restaurants, hotels and places of publ ic entertainment; or (b) the use of wells, tanks, bathing ghats, roads and places of public resort maintained wholly or partly ou t of State funds or dedicated to the use of the general public. Thus, if any person is prevented from using water wells or bathing ghats constructed for public use, then Article 15 will be violated. So, pair II is correctly matched. Article 29 which provides for any section of the citizens of India to have their distinct language, script or culture of its own and the right to conserve the same – This Article further states that no citizen shall be denied admission to any educational institution maintained by the State on grounds of Religion, Race, Caste or Language. So, pair III is correctly matched. Article 23 prohibits traffic in human beings, begar (forced labour) and other similar forms of forced labour. The term ‘ begar’ means compulsory work without remuneration . This Article 23 ensures that no person can be compelled to work against their will or under exploitative conditions. Thus, forcibly making a person to work on the fields of another person without being paid would amount to violation of Article 23. So, pair IV is correctly matched."},{"id":29,"txt":"Consider the following Constitutional Amendment Acts in relation to the Constitution of India:\\n1. The 42nd Amendment Act of 1976\\n2. The 44th Amendment Act of 1978\\n3. The 86th Amendment Act of 2002\\n4. The 93rd Amendment Act of 2005\\n5. The 106th Amendment Act of 2023\\nHow many of the above mentioned Acts did not made any changes to Part III of the Constitution of India?","ref":"","opts":["Only one","Only two","Only three","Only four"],"ci":0,"exp":"Ex: The Fundamental Rights are enshrined in Part III of the Constitution from Articles 12 to 35. As stated by the Supreme Court in the Keshavananda Bharati case, 1973 and subsequent judgements, Fundamental Rights as mentioned in the Constitution are not sacrosanct and can be amended by the Parliament via Article 368 , lest it doesn’t change the Basic Structure of the Constitution. The 42nd Constitutional Amendment Act of 1976 made changes to Article 31C stating that any rights mentioned in Part III of the Constitution can be amended to give effect to any of the DPSP of Part IV of the Constitution. So, point I is not correct. The 44th Constitutional Amendment Act of 1978 made changes to Part III of the Constitution of India. It deleted the right to property from the list of Fundamental Rights and made it only a legal right. Also, it provided that the Fundamental Rights guaranteed by Articles 20 and 21 cannot be suspended during a national emergency. So, point II is not correct. The 86th Constitutional Amendment Act, 2002 inserted Article 21A in Part III. It says that \\"The State shall provide free and compulsory education to all children aged six to fourteen years in such manner as the State may, by law, determine.\\" So, point III is not correct. The 93rd Constitutional Amendment Act of 2005 made changes to Part III of the Constitution of India. It amended Article 15. It empowered the state to make special provisions for the socially and educationally backward classes or the Scheduled Castes or the Scheduled Tribes in educational institutions including private educational institutions. So, point IV is not correct. The 106th Constitutional Amendment Act, 2025 did not make any changes to Part III of the Constitution of India. The Constitution (106th Amendment) Act, 2023, reserves one - third of all seats for women in Lok Sabha, State legislative assemblies, and the Legislative Assembly of the National Capital Ter ritory of Delhi, including those reserved for SCs and STs. So, point V is correct. So, only one of the above mentioned Acts did not make any changes to Part III of the Constitution of India."},{"id":30,"txt":"Consider the following statements:\\nStatement I: The Courts cannot adjudicate on the relevance, validity or interpretation of the words included in the Preamble of the Constitution of India.\\nStatement II: The Preamble is not-justiciable and its provisions are not enforceable in the Court of law.\\nWhich of the following is correct with respect to the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":3,"exp":"Ex: The Preamble to the Constitution of India expresses the broad philosophy and core values of the Constitution. In Kesavananda Bharati v. State of Kerala (1973), the Supreme Court held that the Preamble is a part of the Constitution and can be used to interpret ambiguous provisions. The Court has also deliberated extensively on terms like \\"Secular\\", \\"Socialist\\", and \\"Republic\\". More recently, in 2023, the Supreme Court entertained a Public Interest Litigation challenging the inclusion of “Socialist” and “Secular” in the Preamble, whi ch it ultimately dismissed, but not before interpreting their meaning and Constitutio nal validity. This shows that Courts do have the power to interpret and assess the relevance and meaning of terms in the Preamble. So, statement I is not correct. The Preamble is non - justiciable, meaning its provisions cannot be directly enforced in a Court of law. It does not grant specific legal rights or impose legally enforceable obligations. Its value lies in providing a guiding framework for the interpretation of the Constitution and laws enacted under it. So, statement II is correct. So, statement – I is not correct, but Statement – II is correct"},{"id":31,"txt":"Which one of the following constituents of the Constitution of India provides for the explicit separation of the Executive from the Judiciary in the country?","ref":"","opts":["Fundamental Rights","irective Principles of State Policy","Seventh Schedule","Tenth Schedule"],"ci":1,"exp":"Ex: Separation of Powers , refers to the division of Government responsibilities into distinct branches to limit any one branch from exercising the core functions of the other. The intent is to prevent the conCentration of power and provide for necessary checks and balances. The principle of separation of powers is a fundamental feature of the Constitution of India and has also been recognised as a basic structure of the Constitution . The Directive Principles of State Policy under Part IV provide guidance for achieving this objective. Article 50: Article 50 directs the State to take steps to separate the judiciary from the executive in the public services of the State. This provision aims to ensure the independence of the judiciary at the subordinate level by minimizing executive control and interf erence in judicial functions."},{"id":32,"txt":"Consider the following statements:\\nStatement I: A Constitutional Amendment Act was enacted in 1975 to incorporate Sikkim as a full-fledged State of India.\\nStatement II: Any new territory can be incorporated into the Union of India only through a Constitutional Amendment.\\nWhich of the following is correct with respect to the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct G S T est – 02 – Polity ( V 7702)"],"ci":2,"exp":"Ex: Sikkim, which was earlier a monarchical system, was a protectorate of India till the year 1974, when via the 35 Constitutional Amendment Act, 1974 it was incorporated to the Indian Union by creating a separate category of ‘ associated states ’ in the country’s federal structure. In 1975, following a referendum and political developments in Sikkim, the 36th Constitutional Amendment Act was passed, making Sikkim a full - fledged State of the Indian Union and adding Article 371F to the Constitution. The purpose of this Act was to add Article 371F to the Constitution and to abolish the category of associate States. So, statement I is correct. Not all territorial incorporations into the Union of India require a Constitutional Amendment. Under Article 2 of the Constitution, Parliament has the power to admit or establish new states into the Union through an ordinary law, without requiring a Constitutional Amendment. For example, Puducherry was incorporated through such an act. So, statement II is not correct. Article 2 of the Constitution of India provides the Parliament with the power of enacting a law in order to admit into the Union or establish new States ‘on such terms and conditions as it thinks fit’. While, Article 3 authorizes Parliament to change the boundaries of the existing States of the Union . It must be noted here that Article 4 of the Constitution explicitly provides that no changes done as per Article 2 and Article 3 will require a Constitutional Amendment under Article 368 of the Constitution. So, statement – I is correct, but Statement – II is not correct"},{"id":33,"txt":"Consider the following statements:\\n1. The Governor of a State may, with the consent\\nof the Central Government, entrust it with any matter to which the executive power of the State extends.\\n2. The delegation of executive powers from the Center to the State Government cannot be done without the consent of the latter.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":0,"exp":"Ex: Under the current Constitutional and legal scheme, the distribution of executive power in general follows the distribution of legislative powers. But, such a rigid division in the executive sphere may lead to occasional conflicts between the two. Hence, th e Constitution provides for inter - Governmental delegation of executive functions. Under Article 258 of the Constitution, the President may, with the consent of the State Government, entrust to it any of the executive functions of the Center. Similarly, as per Article 258A (added via the Seventh Constitutional Amendment Act, 1956), the Governor of a State may, with the consent of the Central Government, entrust it with any matter to which the executive power of the State extends. So, statement I is correct. The Constitution makes a provision for the entrustment of the executive functions of the Center to a State without the consent of the State. But, in this case, the delegation is by the Parliament and not by the President. So, statement II is not correct."},{"id":34,"txt":"Which of the following bills can not be introduced in the Parliament without the prior recommendations of the President?\\n1. A bill altering the boundaries of any State\\n2. A Bill for the withdrawal of funds from the Consolidated fund of India\\n3. A bill to expand the jurisdiction of the High Courts\\nSelect the correct answer using the code given below:","ref":"","opts":["I and III only","II and III only","I and II only","I, II and III"],"ci":2,"exp":"Ex: The Constitution of India requires prior Presidential recommendation for the introduction of certain types of bills in Parliament, to maintain federal balance and financial propriety. As per Article 3 of the Constitution , any bill contemplating the changes in the boundary(ies) of the State(s) can be introduced in the Parliament only with the prior recommendation of the President. So, point I is correct. For withdrawing funds from the Consolidated Fund of India, there is a requirement of Money bill to be presented on the floor of the Parliament as per Article 110 of the Constitution, for which the prior recommendation of the President is required . So, point II is correct. When Parliament passes a bill to expand the jurisdiction of a High Court , it does so under Article 225 . This does not require prior recommendation of the President. So, point III is not correct. As per Article 274 of the Constitution , no bill or amendment which imposes or varies any tax or duty in which States are interested, or which varies the meaning of the expression \\"agricultural income” , shall be introduced or moved in either House of Parliament except on the recommendation of the President."},{"id":35,"txt":"Match the following Directive Principles of State Policy with the corresponding Articles of the Constitution: Directive Principle Article\\n1. Securing a living wage A. Article 51\\n2. Uniform Civil Code B. Article 48\\n3. Prohibiting slaughter of C. Article 43 cows\\n4. Promoting international D. Article 44 peace\\nSelect the correct answer using the code given below:","ref":"","opts":["I-A, II-B, III-C, IV-D","I-B, II-C, III-A, IV-D","I-D, II-A, III-B, IV-C","I-C, II-D, III-B, IV-A"],"ci":3,"exp":"Ex: The Directive Principles of State Policy are principles laid down in Part IV of the Constitution of India to guide the State in policy formulation aimed at establishing a just and equitable society. DPSPs are non - justiciable but fundamental to governance. Article 43 directs the State to ensure that all workers receive a living wage , decent working conditions, and a reasonable standard of living. This provision seeks to promote economic justice and the welfare of the labor force, emphasizing dignity and social security for all workers. Article 44 urges the State to secure for its citizens a Uniform Civil Code throughout the territory of India. This aims to replace personal laws based on religion, caste, or community with a common set of civil laws, thereby promoting national integration and gender equality. Article 48 mandates the State to organize agriculture and animal husbandry on scientific lines and to prohibit the slaughter of cows, calves, and other draught and milch cattle. This provision reflects the cultural and economic importance of cattle in Indian society. Article 51 directs the State to promote international peace and security , foster respect for international law and treaty obligations, and encourage settlement of international disputes by arbitration. This provision reflects India’s commitment to global peace and diplomacy. So, the correct matching code is Securing a living wage – Article 43 [I – C]; Uniform Civil Code Article 44 [II – D]; Prohibiting slaughter of cows – Article 48 [III – B]; Promoting international peace – Article 51 [IV – A]."},{"id":36,"txt":"Consider the following statements regarding the Directive Principles of State Policy (DPSPs):\\nStatement I: Courts cannot declare any law unconstitutional for violating DPSPs alone.\\nStatement II: DPSPs are not self-executory in nature.\\nWhich of the following is correct with respect to the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: The Directive Principles of State Policy (DPSPs) aim to guide the State in establishing social and economic democracy but are non - justiciable. DPSPs are non - justiciable as mentioned under Article 37 . Courts cannot declare any law unconstitutional for violating DPSPs alone since these principles are not enforceable legal rights. The Supreme Court has repeatedly emphasized that DPSPs are guidelines, not enforceable mandates. So, statement I is correct. Unlike Fundamental Rights, none of the DPSPs are self - executing. They require specific legislative action to be implemented. Until the Legislature enacts appropriate laws, these provisions remain as principles and do not automatically confer legal rights. So, statement II is correct. Through the 25 Constitutional Amendment Act, 1971 , Article 31C was added to the Part IV of the Constitution, which stated that any law made to give effect to Article 39(b) and Article 39(c) of the Constitution of India will not be considered violative of Article 14 and Article 19. In essence, giving a superseding position to Article 39(b) and (c) to Article 14 and 19. This position was further upheld by the Supreme Court when in 1973 it stated that where Article 39(b) comes in Article 14 goes out. So, both statement I and statement II are correct, but statement I does not explain statement I. Therefore, option ( b ) is the correct answer."},{"id":37,"txt":"Consider the following statements with reference to the Charter Act of 1833:\\n1. The Governor General of India got the exclusive legislative powers for the entire country.\\n2. It ended the activities of East India Company as a commercial body.\\n3. It extended the company's rule but didn't specify any time limit for the same.\\nWhich of the statements given above are correct?","ref":"","opts":["I and II only","II and III only","I and III only","I, II and III"],"ci":0,"exp":"Ex: The Charter Act of 1833 was a landmark legislation passed by the British Parliament to reorganize the administrative structure of British India. It marked a significant shift from commercial to political and administrative control of India by the British. o It marked the zenith of the Centralization spree which started in 1773. The Governor General of Bengal, who post the promulgation of this Act was to be designated as Governor General of India was made the nodal office to control all civil, military and revenue matters, which he has to do in consultations with his council. The Presidencies of Madras and Bombay were stripped of all their legislative powers, making the Governor General of India to hold exclusive legislative authority over all British territories in India. The Governors of Bombay and Madras can only give advice to the Governor General of India regarding law making in their respective regions. So, statement I is correct. The Charter Act of 1833 ended the East India Company's role as a commercial body , and it became purely an administrative and political agency of the British Crown in India . All trading functions were abolished , and the Company’s monopoly in tea trade and trade with China (which had continued after the 1813 Act) was also ended. So, statement II is correct. The Charter which was renewed every twenty years from 1773, when it became due for renewal in 1833, there was a widespread agitation in Britain for the abolition of the company and a direct takeover of the Indian administration by the Government. Taking cognisance of it, the Act mentioned that the Company’s territories in India were held by it in ‘trust of his majesty, his heirs and successors’ , but renewed the Charter for another twenty years, that is this trust for holding Indian territories in the Company was extended till 1853 . So, statement III is not correct. o It was only at the eve of subsequent renewal of the Charter in 1853, when the British while extending the ‘Trust’, fell short of ascribing any specified time line to it, making it implicit that the Company can be displaced at any time and the Crown can est ablish direct control over Indian territories. Knowledge Box Some of the key provisions of The Government of India Act, 1833: o Centralization of Power: The Governor - General of Bengal was redesignated as the Governor - General of India , holding exclusive legislative authority over all British territories in India. The Governors of Bombay and Madras can only give advice to the Governor General of India regarding law making in their respective regions. o Addition of a Law Member: A legal expert (Law Member) — Lord Macaulay — was added to the Governor - General’s Council to focus on legislation, without executive voting power. o Establishment of Law Commission: The Act authorized the creation of a Law Commission to codify Indian laws, leading to the drafting of the Indian Penal Code and civil/criminal codes. o Promotion of Equality in Employment: It legally prohibited discrimination in public service appointments based on religion, race, caste, or color, opening the path (in principle) for Indian recruitment. o European Settlement and Social Reforms: The Act permitted unrestricted European settlement and property ownership in India and included a call for the improvement and eventual abolition of slavery in practice."},{"id":38,"txt":"The Rajamannar commission, Sarkaria Commission and Punchhi Commission in the constitutional history of India are related to:","ref":"","opts":["reorganisation of States on the basis of language","onstitutional recognition to local Government","reservation in jobs for Backward Classes","enter-State Relations"],"ci":3,"exp":"Ex: As under the Constitution of India, there is insufficient compartmentalisation of the Central and State powers, and the federal structure adopted under the current Constitutional scheme is quasi - federal with a strong Central bias, that is why the Center - St ate relations have been a source of continuous contestations. Various commissions have been appointed both at the Central as well as the State’s level to ponder upon the dynamics of Central and State powers. Some of the prominent committees appointed in this regard are, First Administrative Reforms Committee (1966), Rajamannar Committee (1969), Sarkaria Commission (1983), and Punchhi Commission (2007) o The Rajamannar Commission was appointed by the Tamil Nadu Government to study Center - State relations and recommend ways to make the federal structure more balanced and equitable. Important recommendations of the commission: An Inter - State Council should be formed immediately. The Finance Commission should be made permanent. The Planning Commission should be disbanded and replaced by a statutory body. Articles 356, 357, and 365 (concerning President's Rule) should be deleted entirely. The provision stating that the state ministry holds office at the pleasure of the governor should be removed. Certain subjects from the Union List and the Concurrent List should be transferred to the State List. Residuary powers should be devolved to the states. All - India services such as IAS, IPS, and IFS should be phased out. o The Sarkaria Commission , appointed by the Central Government, made extensive recommendations on the working of the federal system, especially in relation to legislative, administrative, and financial relations between the Center and the States. Important recommendations of the commission: Establishment of an Inter - States council under Article 263 The State Legislative Assembly should not be dissolved either by the Governor or the President before the proclamation under Article 356(1) is laid before Parliament. The Governor should be a detached figure , not too involved in local politics. There should be a shift from the current emphasis on generalism to greater specialization in specific areas of public administration. o The Punchhi Commission was appointed to review the functioning of Center - State relations in the context of emerging socio - economic developments and gave recommendations for better cooperation and coordination between the two levels of Government. Important recommendations of the committee: It recommended that the National Integration Council hold at least one annual meeting and that a delegation of five members visit any communally affected area within two days. Proposed that the Finance Commission Division in the Ministry of Finance be upgraded into a full - fledged department, serving as the permanent secretariat for theFinance Commission. Any discretionary actions of the Governor must be limited , guided by reason, exercised in good faith, and approached with caution."},{"id":39,"txt":"Consider the following statements regarding Inter States Council:\\n1. It is a Constitutional body under Article 263.\\n2. The Union Home Minister is the ex-officio chairperson of the Council.\\n3. Its decisions are generally taken by consensus\\namong its members.\\nHow many of the statements given above are correct?","ref":"","opts":["Only one","Only two","ll the three","None"],"ci":1,"exp":"Ex: The Inter - State Council (ISC) is a key mechanism for promoting cooperative federalism and coordination between the Center and the States. The Sarkaria Commission in 1983 strongly recommended activation of the Inter - State Council to strengthen Center - State relations. The Inter - State Council has Constitutional status as it is provided for under Article 263 of the Constitution of India . Article 263 empowers the President to establish such a council if it appears necessary for better coordination between States and the Center. Though not permanent initially, it has been established as a standing body. Therefore, its basis lies directly in the Constitution, making it a Cons titutional body. So, statement I is correct. The Prime Minister is the ex - officio Chairperson of the Inter - State Council . Other members include six Union Cabinet Ministers (including the Home Minister) and Chief Ministers of all States and Union Territories with Legislatures among others. So, statement II is not correct. The decisions of the Inter - State Council are generally taken by consensus among its members. The Council is designed to function as a consultative and cooperative platform rather than a forum for adversarial decision - making. Its purpose is to resolve disputes and coordinate policies between the Center and the States through mutual agreement. So, statement III is correct. So, only two of the above given statements are correct."},{"id":40,"txt":"Consider the following statements:\\nStatement I: Decrees passed by the criminal Courts of one State are applicable for execution across all other States of the Union of India as well.\\nStatement II: The Constitution of India explicitly provides for ‘Full Faith and Credit’ to judicial proceedings, public acts of Union and the States throughout the country.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":3,"exp":"Ex: The ‘ Full Faith and Credit ’ clause in the Constitution of India is taken from the American Constitution, where it forms an essential element of Federal polity. The clause ensures that States recognize and respect each other's laws and judgments . This Constitutional provision promotes unity and cooperation among States, preventing them from ignoring or contradicting one another's legal decisions and documents. It aims to protect individuals' rights across State lines while balancing State autonomy and nation al unity. In the Constitution of India, it is explicitly mentioned in Article 261 that full faith and credit is to be given to judicial proceedings, public acts of Union and the states throughout the country. So, statement II is correct. But this ‘ Full Faith and Credit’ is not absolute and is subject to powers of the Parliament. The Parliament can decide via legislation to up to which level civil laws and Court orders of one State will have their applicability in another State. Further, ‘full faith and credit’ applies only to civil laws, criminal laws of one State cannot be made applicable in other States. So, statement I is not correct. So, Statement I is not correct, but Statement II is correct."},{"id":41,"txt":"Consider the following statements:\\n1. A State Legislature, with the prior reccomendation of the President, can impose restrictions on trade and commerce within a State in public interest.\\n2. The Parliament cannot give preferential treatment to one State over the other in trade and commerce under any circumstances.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II G S T est – 02 – Polity ( V 7702)"],"ci":0,"exp":"Ex: The Constitution of India guarantees the freedom of trade, commerce, and intercourse throughout the country under Part XIII (Articles 301 to 307), but allows certain restrictions in specified circumstances. Article 301 guarantees freedom of trade and commerce throughout India. However, restrictions on trade and commerce can only be imposed by Parliament under Articles 302, 303 and 304. A State Legislature can impose restrictions only under limited conditions laid down in Article 304, such as public interest, with the prior recommendation of the President, but such a restriction should not be discriminatory in nature. So, statement I is correct. Article 302 empowers Parliament to impose restrictions on trade and commerce between States or within States, Parliament may impose such restrictions in the public interest, which may include but is not restricted to scarcity. There is a provision, that in case of scarcity the Parliament can give preferential treatment to one State over the other , which otherwise it is prohibited to give. So, statement II is not correct."},{"id":42,"txt":"Consider the following situations:\\n1. Establishing contact with an enemy country during a war situation\\n2. Voluntarily acquiring the citizenship of any other country\\n3. Getting imprisoned for more than two years, within five years of being a naturalised citizen\\nAs per the Constitution of India, how many of the above situations can be taken to as grounds for the termination of Indian citizenship?","ref":"","opts":["Only one","Only two","ll the three","None"],"ci":0,"exp":"Ex: The Part II of the Constitution of India , deals with the subject of citizenship. It contains seven articles (Article 5 to Article 11), the first four articles (Article 5 to 8) defines for whom should be considered as a citizen of India at the commencement of the Constitution, while the latter tw o (Article 10 and 11) confers it on the Parliament to make laws related to citizenship from there on. In essence, the Constitution only identifies the persons who become citizens of India at its commencement, it doesn’t deal with the issue of acquisition or loss of citizenship after that, for this it empowers the Parliament to enact laws to provide for such matters and any other laws related to citizenship. But, the Constitution of India, under Article 9 provides for one condition for the termination of citizenship – ‘No person shall be a citizen of India or be deemed to be such, if he/she has voluntarily acquired the citizenship of foreign State’. Hence, the Constitution provides for only one of the grounds for termination of citizenship, and that is Voluntarily acquiring the citizenship of any other country. So, point II is correct. The Citizenship Act (1955) prescribes three ways of losing citizenship, viz, renunciation, termination and deprivation. Deprivation refers to a compulsory termination of Indian citizenship by the Central Government under the following circumstance: If the person has obtained Indian citizenship by fraud. If the said citizen has shown disloyalty to the Constitution of India. If the said citizen has unlawfully traded or communicated with the enemy during a war. So, point I is not correct. If the person has been imprisoned in any country for at least two years, within five years after registration or naturalisation. So, point III is not correct. If the said citizen has been ordinarily resident out of India for seven years continuously. (This will not apply if he is a student abroad, or is in the service of a Government in India or an international organisation of which India is a member, or has registered annually at an Indian consulate with his intention to retain his Indian citizenship.) There are two other ways of losing citizenship i.e. renunciation, and termination. By Renunciation : Any citizen of India of full age and capacity can make a declaration renouncing his Indian citizenship. Upon the registration of that declaration, that person ceases to be a citizen of India. However, if such a declaration is made during a war in which I ndia is engaged, its registration shall be withheld by the Central Government. ■ Further, when a person renounces his Indian citizenship, every minor child of that person also loses Indian citizenship. However, when such a child attains the age of eighteen, he may resume Indian citizenship. So, as per the Constitution only one of the above situations can be taken to as grounds for the termination of Indian citizenship."},{"id":43,"txt":"Consider the following statements with reference to the National Population Register (NPR) in India:\\n1. It is a statutory document under the Citizenship Act, 1955.\\n2. It records the database of citizens of India only.\\n3. It records both demographic and biometric data.\\nWhich of the statements given above are correct?","ref":"","opts":["I and II only","II and III only","I and III only","I, II and III"],"ci":2,"exp":"Ex: The National Population Register (NPR) is a register of usual residents of the country. The objective of the NPR is to create a comprehensive identity database of every usual resident in the country. The first National Population Register was prepared in 2010 and updating this data was done du ring 2015 by conducting door to door surveys. The National Population Register (NPR) is being prepared under provisions of the Citizenship Act, 1955 and the Citizenship (Registration of Citizens and issue of National Identity Cards) Rules, 2003. It is mandatory for every “usual resident of India” to register in the NPR. Only Assam will not be included (as per a notification by the Registrar General of India), given the recently completed NRC in that state. So, statement I is correct. The National Population Register (NPR) is a list of “usual residents of the country”. According to the Home Ministry, a “usual resident of the country” is one who has been residing in a local area for at least the last six months or intends to stay in a particular location for the next six months. NPR is not a citizenship enumeration drive, as it would record even a foreign national staying in a locality for more than six months. This makes NPR different from the NRC, which includes only Indian citizens whi le seeking to identify and exclude non - citizens. So, statement II is not correct. NPR was to be conducted in conjunction with the house - listing phase, the first phase of the Census, by the Office of Registrar General of India (RGI) for the next Census. It is conducted at the local, sub - district, district, state and national levels. The NPR collects both demographic data and biometric data. There are 15 different categories of demographic data, ranging from name and place of birth to education and occupation. For biometric data it will depend on Aadhaar, for which it will seek Aadhaar details of the residents. So, statement III is correct."},{"id":44,"txt":"Consider the following statements:\\nStatement I: Rights under Articles 14 and 19 can be restricted for the enforcement of Fundamental Duties.\\nStatement II: Rights under Part III are subservient to the Duties in Part IVA of the Constitution of India.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":2,"exp":"Ex: The Constitution of India attempts to create a balance between Fundamental Rights (Part III) and Fundamental Duties (Part IVA), though both have different Constitutional status. While Fundamental Duties are non - justiciable, Courts have recognized that the enforcement of some Fundamental Duties may justify imposing reasonable restrictions on Fundamental Rights . For example, freedom of speech (Article 19) may be restricted to prevent speech that incites hatred among communities, thereby promoting harmony (a Fundamental Duty under Article 51A(e)). Similarly, in AIIMS Students Union v. AIIMS (2001), the Supreme Court held that duties can be a source of reasonable restrictions under Art icles 19 and 14. So, statement I is correct. As noted by the Supreme Court, though Fundamental Duties can be used to uphold the statutes which seek to promote the objects laid down in Fundamental Duties, these in no aspect make Fundamental Rights subservient to Duties. Rather these are independent of each other. So, statement II is not correct. So, statement I is correct, but statement II is not correct. Therefore, option ( c ) is the correct answer."},{"id":45,"txt":"Consider the following communities:\\n1. Sikhs\\n2. Scheduled Castes\\n3. Women\\n4. Parsis\\n5. Labour In the colonial history of India, how many of the above communities were extended separate electorates?","ref":"","opts":["Only two","Only three","Only four","ll the five"],"ci":0,"exp":"Ex: Separate electorate is a system of elections to Legislatures which divides voters along lines of their religion or ethnicity, designed to ensure that each religious or ethnic group can elect their own representatives. The system of separate electorate means that the community to which the electorate belongs would elect their leaders through an election in which the candidates and voters, limited to their community, are allowed to vote and contest respectively . In India, the principle of separate electorate was introduced for the first time in 1909 , when via the Morley - Minto reforms, it was granted to Muslim community. Later on it was extended to Sikhs as well via the Government of India Act, 1919. So, point I is correct. On the eve of thrifting of the Government of India Act, 1935 , as a corollary result of the three Round Table Conferences (RTCs), a communal award was designed under which provisions of separate electorate were proposed to be extended to Scheduled Castes, Women and Labour as well. But, post the Poona pact , between MK Gandhi and BR Ambedkar, the demand for separate electorate for Scheduled Castes were dropped and thus never found mention in the Government of India Act, 1935. So, point II is not correct. Also , women were never awarded the separate electorates but were given reserved seats in the Legislature via the Government of India Act, 1935 . So, point III is not correct. Labour, along with Anglo - Indian communities and Indian - Christian communities were brought under separate electorates via the 1935 act . So, point V is correct. Parsis were never awarded separate electorates throughout the course of colonial history. So, point IV is not correct. So, in the colonial history of India only two of the above communities were extended separate electorates."},{"id":46,"txt":"With reference to the application of the ‘Rule of law’ in India, consider the following statements:\\n1. The Rule of Law is a part of the basic structure\\nof the Constitution of India. II . Article 14 of the Constitution of India explicitly mentions the 'Rule of law' to be a part of the Right to Equality.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":0,"exp":"Ex: Rule of Law is considered as the foundational principle of Constitutionality, it ascribes that each and every person is a subject and subjected to the same law which is superior to any individual. The Supreme Court in Keshavananda Bharati versus the State of Kerala, 1973 held certain features of the Constitution of India as part of its basic structure, like democracy, secularism, federalism, and the rule of law. Further, in the case of Indira Nehru Gandhi v. Raj Narayan, the Apex Court again held that Rule of Law embodied in Article 14 of the Constitution is the “basic structure” of the Constitution of India and hence it cannot be destroyed even by an amendment of the Constitution under Article 368 o f the Constitution. So, statement I is correct. Article 14 of the Constitution says that the State shall not deny to any person equality before the law or the equal protection of the laws within the territory of India. Article 14 of the Constitution of India does not explicitly mention the 'Rule of law' to be a part of the Right to Equality. It states that “The State shall not deny to any person equality before the law or the equal protection of the laws within the territory of India.” So, statement II is not correct. Therefore, option ( a ) is the correct answer. Knowledge Box AV Dicey’s Rule of Law: The concept of ‘Rule of Law’ was propounded by A.V. Dicey, the British jurist. His concept has the following three elements: Absence of arbitrary power. This means that no man can be punished except for a breach of law. Equality before the law. It implies equal subjection of all citizens to the ordinary law of the land. The primacy of the rights of the individual. It implies that the Constitution is the result of the rights of the individual rather than the Constitution being the source of the individual rights. The first and the second elements are applicable to the Indian System and not the third one. In the Indian System, the Constitution is the source of the individual rights ."},{"id":47,"txt":"A child born on 27th July 2025 in India will not be considered as its citizen under which one of the following situations?","ref":"","opts":["If only one of its parents is a citizen of India and the other is a foreigner visiting India after fulfilling due immigration formalities.","If both of its parents are Indian passport holders but are not the ordinary residents of the country.","If one of its parents is an Indian citizen while the other parent is an illegal immigrant.","If both parents are Indian citizens but the child was conceived via in-vitro fertilization conducted in a foreign hospital. G S T est – 02 – Polity ( V 7702)"],"ci":2,"exp":"Ex: In India, the Citizenship Act of 1955 provides for acquisition and loss of citizenship after the commencement of the Constitution. The Citizenship Act of 1955 prescribes five ways of acquiring citizenship, viz, birth, descent, registration, naturalisation and incorporation of territory. In India, a person can acquire citizenship by birth. The conditions are as follows: A person born in India on or after January 26, 1950 but before July 1, 1987 is a citizen of India by birth irrespective of the nationality of his parents. A person born in India on or after July 1, 1987 is considered as a citizen of India if either of his parents is a citizen of India at the time of his birth. Further, those born in India on or after December 3, 2004 are considered citizens of India only if: a) both of their parents are citizens of India or; b) one of whose parents is a citizen of India and the other is not an illegal migrant at the time of their birth. ■ So, even if one of the parents is a citizen of India, and the other is not an illegal migrant at the time of their birth, then the child would be considered as a citizen of India. So, option a is not correct. ■ Indian Passports are given only to Indian citizens. So, if both of its parents are Indian passport holders means both of its parents are Indian citizens. In such a case, the child is eligible to be a citizen of India by birth. So, option b is not correct. ■ For children born on or after December 3, 2004, they will not be citizens of India if one of their parents is an illegal migrant at the time of their birth. So, option c is correct. As per the provisions of Assisted Reproductive Technology Act, 2021 any child born via Assisted Reproductive Techniques such as in - vitro fertilization is deemed to be as a biological child of the couple, and have equal rights as any other child. So, option d is not correct."},{"id":48,"txt":"Consider the following:\\n1. Minimizing inequalities in income, status, facilities and opportunities\\n2. Provisions for maternity relief\\n3. Participation of workers in the management of industries\\n4. Provision of free and compulsory education to children up to 14 years of age\\n5. Equal pay for men and women\\nHow many of the above provisions of Part IV of the Constitution were added via amendments to the Constitution of India?","ref":"","opts":["Only two","Only three","Only four","ll the five"],"ci":0,"exp":"Ex: The Directive Principles of State Policy (DPSP) under Part IV were adopted from the Irish Constitution and aimed at establishing a welfare state. Over the years, several provisions were added through Constitutional amendments based on changing socio - economic needs. Originally, Article 38 aimed only at securing a social order. The 44th Constitutional Amendment Act, 1978 inserted Clause (2) to Article 38, explicitly requiring the State to minimize inequalities not only in income but also in status, facilities, and opportunities. This provision was not part of the original text of 1950. So, point I is correct. Article 42 , which directs the State to make provision for securing just and humane conditions of work and for maternity relief , was included in the original Constitution of 1950 itself. It reflects the concern for the welfare of working women of the Constituent Assembly. So, point II is not correct. Article 43A was inserted by the 42 Constitutional Amendment Act, 1976. It directs the State to take steps to secure the participation of workers in the management of industries to promote industrial democracy. So, point III is correct. Article 45 in the original Constitution provided for free and compulsory education for all children up to the age of 14 years within ten years from the commencement of the Constitution. It was included in 1950 itself. Later, it was modified by the 86th Amendment Act, 2002, but its original form was present in the 1950 Constitution. So, point IV is not correct. Article 39(d) , which directs the State to secure equal pay for equal work for both men and women , was present in the original Constitution . This reflects the farmers' early commitment to gender equality. So, point V is not correct. So, only two of the above provisions of Part IV of the Constitution were added via successive amendments to the Constitution of India"},{"id":49,"txt":"Consider the following statements:\\n1. Only a language listed in the Eighth Schedule\\nof the Constitution can be recognised as an official language of the State.\\n2. The State Legislature has the exclusive prerogative for determining the official language of the State.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":3,"exp":"Ex: Part XVII of the Constitution of India deals with the matters of Language to be used across the country and by various administrative divisions, it consists of four chapters dealing with Language of the Union, Regional Language, Language of the Courts and Special provisions respectively. Apart from Part XVII, the Constitution also has the Eighth Schedule , which consists of a list of languages recognised as official languages in the country. Any inclusion or exclusion of languages from the Schedule requires a Constitutional Amendment under Article 368(1) of the Constitution. As per Article 345, the State Legislatures are empowered to choose any one or more of the languages being spoken in their respective States as the official language . There is no Constitutional requirement that only languages listed in the Eighth Schedule can be adopted as the official language of a State. A State can adopt any language spoken in that state as its official language, even if it is not included in the E ighth Schedule. So, statement I is not correct. Apart from the State Legislature, the President can also decide whether any language is to be added to the official languages of the State. This is done by the President satisfied that a substantial portion of the population in that State want their spoken language to be declared as official language. So, statement II is not correct."},{"id":50,"txt":"With reference to the Fundamental Rights enshrined in Part III of the Constitution of India,\\nconsider the following:\\n1. Article 15\\n2. Article 17\\n3. Article 20\\n4. Article 23\\n5. Article 25\\nWhich of the above Fundamental Rights is/are\\nconsidered absolute in nature?","ref":"","opts":["II only","II and IV only","I, III and V only","I and III only"],"ci":0,"exp":"Ex: The Fundamental Rights are enshrined in Part III of the Constitution of India. Part III includes Articles 12 to 35. The absolute rights are those on which the State cannot impose any restrictions. Article 15 provides that the State shall not discriminate against any citizen on grounds only of religion, race, caste, sex or place of birth. This right is not absolute as it provides for certain exceptions. For instance, the state is permitted to make any special provision for women and children. So, point I is not correct. Article 17 provides for the abolition of untouchability. It says that “Untouchability” is abolished and its practice in any form is forbidden. The enforcement of any disability arising out of “Untouchability” shall be an offence punishable in accordance with law. Article 17 is considered absolute in nature as there are no exceptions or restrictions given in this. So, point II is correct. Article 20 provides protection in respect of conviction for offences. Article 20 grants protection against double jeopardy, ex - post - facto law and self - incrimination. This article is not absolute as there are limitations to it. The protection against double jeopardy is not available in proceedings before departmental or administrative authorities as they are not of judicial nature. The protection against ex - post - facto law is not available in case of civil laws or tax laws. The protection against self - incrimination does not extend to compulsory production of material objects, compulsion to give thumb impression, specimen signature, blood specimens, etc. Further, the Supreme Court has itself ruled in multiple judgements that protection against self - incrimination is not absolute. So, point III is not correct. Article 23 prohibits traffic in human beings, begar and other similar forms of forced labour. Any contravention of this provision shall be an offence punishable in accordance with law. This article is not absolute , although banning trafficking of human beings is absolute, the prohibition of forced - work is subject to one exception, that is to say, if such service is required for a public reason, the state may ensure a compulsory service. So, point IV is not correct. Article 25 provides that all persons are equally entitled to freedom of conscience and the right to freely profess, practice and propagate religion. But this right must be exercised under the condition of public order, morality and health . Thus, it is not an absolute right. So, point V is not correct."},{"id":51,"txt":"Consider the following statements:\\nStatement I: The power of the Supreme Court of India for judicial review is narrower than that of the Supreme Court of USA.\\nStatement II: The American Constitution has recognised the principle of 'Due process of law' as compared to India's 'Procedure established by law'.\\nWhich one of the following is correct in respect of the above statements?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":0,"exp":"Ex: Judicial review is the exercise of power by superior Courts to test the legality of any Governmental/ State action. It is the exertion of the Court’s inherent power to determine whether an action is lawful or not and to grant appropriate relief. Judicial review is a fund amental mechanism for keeping public authorities within due bounds and for upholding the rule of law. Under the Indian Constitutional law, the element of judicial review as enshrined non explicitly through various provisions in the Constitution is taken from the American Constitution , and has been designated as an inherent part of the Basic Structure of the Constitution by the Supreme Court in multiple judgements. The Supreme Court of the USA exercises much wider judicial review powers than India. In the USA, the Court can strike down laws for violating not just procedural rules but also on the grounds of fairness, justice, and reasonableness due to substantive due process. The Indian Supreme Court's power of judicial review is comparatively narrow er. So, Statement I is correct. th th In the USA, the principle of \\" due process of law \\" was adopted under the 5 and 14 Amendments to the American Constitution, it allows the Courts to assess both the substance and procedure of any law. In India, Article 21 initially followed the narrower expression \\" procedure established by law \\", although in the year 1978 in the Maneka Gandhi versus the Union of India, 1978 , did interpreted the expression ‘Procedural established by law’ to have an implicit substantial value as well, directing the expression towards ‘Due Process of law’, but still Procedure established forms the foundation of Judicial review, which is narrower than that in Ame rican Constitution. So, Statement II is correct. A major difference between Fundamental Rights under the Indian Constitution and the ‘Bill of Rights’ of the US Constitution is that the bill of rights rests on ‘the theory of inalienable natural rights’ which suggests that some rights are inalienable which can by no means be lost to the individuals in a free society, the guarantee of some of them in the written Constitution in no way obsolete any right which is inherited by the individual before the comm encement of Constitution. In essence, the US’s Bill of Rights is not a limitation to deny or disparage any natural rights, rather in the Constitution of India, only those rights enjoy Constitutional protection which are enumerated or interpreted as part of the Part III of the Constitution. That is why, the scope of Fundamental Rights is narrower in Indian Constitution, leaving very limited scope for judiciary to review. So, both Statement I and Statement II are correct and Statement – II explains Statement – I"},{"id":52,"txt":"Suppose a bill for the purpose of a Constitutional Amendment under Article 368 has been put to vote in the Lok Sabha having a total strength of 543 members. Then, the bill will require the support of\\nhow many members if 360 members are present at the time of voting, and no one abstains from casting their vote?","ref":"","opts":["360","240","301","273 G S T est – 02 – Polity ( V 7702)"],"ci":3,"exp":"Ex: Article 368 in Part XX of the Constitution of India deals with the powers of Parliament to amend the Constitution. An amendment of the Constitution of India may be initiated only by the introduction of a Bill for the purpose in either House of Parliament. According to Article 368, a Constitutional Amendment Bill needs to be passed in each House by a majority of the total membership of that House and by a majority of not less than two - thirds of the members of that House present and voting. There are 543 seats in the House of People, i.e., Lok Sabha. Suppose a house has a total strength of 543 members, then such a bill needs to be passed by a majority of the total membership of that House i.e. 273. And such a bill needs to be passed by a majority of not less than two - thirds of the members of that House present and voting i.e. 360 x ⅔ = 240 The higher number is 273. Thus, such a bill needs the support of at least 273 members for its passage. So, point d is correct."},{"id":53,"txt":"Consider the following functionaries:\\n1. Comptroller and Auditor General of India\\n2. Vice President\\n3. Judges of the Supreme Court\\n4. Candidates for the election to the Parliament\\n5. Governor of a State\\nHow many of the above do not have their oaths of office enshrined under the Third Schedule of the Constitution of India?","ref":"","opts":["Only two","Only three","Only four","ll the five"],"ci":0,"exp":"Ex: The Third Schedule of the Constitution of India , contains the affirmations and oaths to be taken by those holding the post of Union Minister, State Minister, Member of Parliament, Member of State Legislature, Supreme Court and High Court Judge amongst others. It finds reference in Articles 75(4), 99, 124(6), 148(2), 164(3), 188 and 219 of the Constitution. It mentions the oaths of the following functionaries: o The Union ministers o The Members of Parliament o The Comptroller and Auditor General of India. So, point I is not correct. o The Judges of the Supreme Court. So, point III is not correct. o T he State Ministers o The members of State Legislature o The Judges of the High Court o Candidates for election to Parliament. So, point IV is not correct. o Candidates for election to State Legislature The Vice President ’s take the oath of faith and allegiance and the same is mentioned in Article 69 of Part V of the Constitution. So, point II is correct. The oath of the Governors of State is given under Article 169 of the Constitution, He/she subscribes to the oath of preserving and protecting the Constitution. So, point V is correct. So, only two of the above functionaries do not have their oaths of office enlisted under the Third Schedule of the Constitution of India."},{"id":54,"txt":"As on 01st July 2025, the Constitution of India consisted of:","ref":"","opts":["22 Parts and 12 Schedules","24 Parts and 10 Schedules","25 Parts and 8 Schedules","25 Parts and 12 Schedules"],"ci":3,"exp":"Ex: The Constitution of India, at the present day consists of 448 Articles arranged in 25 Parts as compared to the Original Constitution promulgated on 26 January 1950 which consisted of 395 Article in 22 Parts: Parts Subject matter I. The Union and its territory II. Citizenship III. Fundamental Rights IV. Directive Principles of State Policy IVA. Fundamental Duties V. The Union Government VI. The State Governments VII. Repealed VIII Union Territories IX. The Panchayats IXA. The Municipalities IXB. The Co - operative Societies X. The Scheduled and Tribal Areas XI. Relations between Union and States XII. Finance, Property, Contracts and Suits XIII. Trade, Commerce and Intercourse within the territory of India XIV. Services under the Union and the States XIVA. Tribunals XV. Elections XVI. Special Provisions relating to Certain Classes XVII. Official Language XVIII. Emergency Provisions XIX. Miscellaneous XX. Amendment XXI. Temporary, Transitional and Special Provisions XXII. Short title, Commencement, Authoritative text Along with 25 parts the Constitution also there are 12 schedules attached to the Constitution (originally eight on 26 January 1950 ): Schedule Subject matter First List of States and Union Territories Second Salary of various functionaries Third Oaths of various functionaries Fourth Distribution of seats in the Upper House of Parliament Fifth Provisions related to Scheduled Areas Sixth Provisions related to Tribal Areas in Assam, Mizoram, Meghalaya and Tripura Seventh Distribution of Legislative powers between the Centre and States Eighth Languages Ninth Laws beyond the powers of Courts to adjudicate Tenth Anti - defection in legislative bodies Eleventh Subjects to be delegated to Panchayats Twelfth Subjects to be delegated to Urban Local Bodies."},{"id":55,"txt":"Consider the following statements with regard to Fazl Ali Commission:\\n1. It recommended the reorganisation of States on the basis of 'One Language One State' principle.\\n2. It took the preservation of the unity of the country as the primary criterion for reorganization of States.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":1,"exp":"Ex: The States Reorganisation Commission (SRC) , commonly known as the Fazl Ali Commission, was appointed in 1953 by the Government of India to examine the question of the reorganization of States. Its report was submitted in 1955, and it became the basis for the States Reorganisation Act of 1956. The Commission did not endorse the principle of ‘One language, one State’ . On the contrary, it rejected this idea explicitly. While the Commission acknowledged the role of language in fostering administrative convenience and cultural identity, it did not consider it sufficient as the sole criterion. It argued that a linguistic basis must be balanced with other considerations like economic viability, administrative efficiency, and cultural cohesiveness. So, statement I is not correct. The Fazl Ali Commission clearly stated that the preservation of the unity and integrity of India should be the paramount objective of any reorganization plan. Although language was a factor, the Commission placed national unity above linguistic or regional demands. It feared that extreme emphasis on language could lead to narrow parochialism and weaken national integration. So, statement II is correct."},{"id":56,"txt":"With reference to Article 25 of the Constitution of India, consider the following statements:\\n1. It protects the religious beliefs as well as the religious practices of an individual.\\n2. It guarantees the right to propagate religion\\nwhich encompasses the right to convert anyone from one religion to another.\\n3. The fundamental right under Article 14 operates as a limitation on the rights provided by Article 25.\\nWhich of the statements given above is/are correct?","ref":"","opts":["III only","II and III only","I only","I and III only"],"ci":3,"exp":"Ex: Article 25 of the Constitution of India guarantees the right to freedom of conscience and free profession, practice and propagation of religion. The first proviso of this Article says that “Subject to public order, morality and health and to the other prov isions of this Part, all persons are equally entitled to freedom of conscience and the right freely to profess, practise and propagate religion. ” The freedom of conscience under this Article refers to inner freedom of an individual to mould his relation with God or Creatures in whatever way he desires. The Right to profess under this Article allows the declaration of one’s religious beliefs and faith openly and freely. The Right to practice allows the performance of religious worship, rituals, ceremonies and exhibition of beliefs and ideas. Thus, Article 25 covers both religious beliefs and religious practices of an individual. So, statement I is correct. The right to propagate under this Article refers to transmission and dissemination of one’s religious beliefs to others or exposition of the tenets of one’s religion. But, it does not include a right to convert another person to one’s own religion . Forcible conversions impinge on the ‘freedom of conscience’ guaranteed to all the persons alike. So, statement II is not correct. Article 25 provides for citizens the freedom to practice and propagate religion, but this right is not absolute . It is subject to public order, morality, health and to the other Fundamental Rights including Article 14 . Thus, the right to religion is subject to the right to equality. So, statement III is correct. Knowledge Box In the Indian Young Lawyers’ Association v State of Kerala Case (Sabarimala Temple Entry case), the Supreme Court declared unConstitutional the Sabarimala Temple's custom of prohibiting women in their 'menstruating years' from entering. The majority opinion of the Court held that the exclusionary practice of the temple was violative of Article 14, 15 and 17. Such a restriction was derogatory to women and amounted to discrimination. The Court struck down rule 3(b) of Kerala Hindu Places of Public Worship (Authorisation of Entry) Rules, 1965, that barred entry of women into the temple."},{"id":57,"txt":"Which one of the following articles of Part III of the Constitution of India is self-executory nature?","ref":"","opts":["rticle 23","rticle 33","rticle 32","rticle 17"],"ci":2,"exp":"Ex: Self - executory Fundamental Rights are those which are directly enforceable, and do not require legislation for their enforcement. Non - self executory Fundamental Rights are those which require legislation to give effect to them. Most of the fundamental rights under Part III of the Constitution of India are directly enforceable (self - executory). But a few of them can be enforced on the basis of a law made for giving effect to them. Such a law can be made only by the Parliament and not by state Legislatures so that uniformity throughout the country is maintained. Article 23 prohibits traffic in human beings, begar (forced labour) and other similar forms of forced labour. Any contravention of this provision shall be an offence punishable in accordance with law. Thus, this right requires a legislation for its enforcement. This is not self - executory in nature. Article 17 abolishes ‘untouchability’ and forbids its practice in any form. The enforcement of any disability arising out of untouchability shall be an offence punishable in accordance with law. Thus, this right requires a legislation for its enforcement. This is not self - executory in nature. Article 33 empowers the Parliament to restrict or abrogate the fundamental rights of the members of armed forces, paramilitary forces, police forces, intelligence agencies and analogous forces . Thus, this right provision requires legislation for its implementation. This is not self - executory in nature. Article 32 confers the right to remedies for the enforcement of the fundamental rights of an aggrieved citizen. Article 32 grants every individual the right to move the Supreme Court for the enforcement of their fundamental rights. The Supreme Court shall have power to issue directions or orders or writs, including writs in the nature of habeas corpus, mandamus, prohibition, quo warranto and certiorari, for the enforcement of any of the rights. This is self - executory in nature."},{"id":58,"txt":"With reference to the Constitutional provisions\\nregarding preventive detention in India, consider the following statements:\\n1. The preventive detention of a person cannot exceed three months under any circumstance.\\n2. The detainee must be provided an opportunity for making a representation against the detention order.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: Preventive Detention means detaining a person without trial or conviction. This detention is based on suspicion and serves as a precautionary measure to avoid potential crime. Its purpose is not to punish a person for a past offence but to prevent him from committing an offen ce in the near future. Article 22 of the Constitution of India makes provisions regarding preventive detention. The Constitution provides for necessary safeguards against preventive detention, foremost being no person can be detained for more than three months without the approval from an advisory board. Thus, if an advisory board reports sufficient cause for an extension, the 3 - month period can be extended, there is no mention of any upper limit for Preventive Detention. So, statement I is not correct. The Advisory Board shall consist of persons who are, or have been, or are qualified to be appointed as, Judges of a High Court. Article 22(5) provides that any person detained under a preventive detention law shall be provided the earliest opportunity of making a representation against the order. Article 22(5) of the Constitution guarantees the detainee’s right of effective representation. It says that when any person is detained, the authority making the order shall afford him the earliest opportunity of making a representation against the order. So, statement II is correct. In the recent case of Jaseela Shahji versus Union of India, 2024 , the Supreme Court said that every detainee has the right to have a fair and just opportunity to present themselves in the Court of law, against their detention."},{"id":59,"txt":"Which of the following are considered as the ‘State’ for the purpose of Part III of the Constitution of India?\\n1. The Gram Panchayats\\n2. The Airports Authority of India\\n3. The Supreme Court of India while performing judicial functions\\n4. The National Human Rights Commission\\nSelect the correct answer using the code given below:","ref":"","opts":["I only","I, II and IV only","I and III only","II, III and IV only"],"ci":1,"exp":"Ex: The term ‘State’ has been used in various provisions concerning fundamental rights. Hence, Article 12 has defined the term ‘State’ for the purposes of Part III of the Constitution of India. According to Article 12, \\"the State\\" includes the Government and Parliament of India and the Government and the Legislature of each of the States and all local or other authorities within the territory of India or under the control of the Government of India. Thus, all local authorities, that is, municipalities, panchayats, district boards, improvement trusts, etc. are included under the meaning of \\"the State.\\" So, point I is correct. According to Article 12, \\"the State\\" includes the other authorities within the territory of India or under the control of the Government of India . In Rajasthan State Electricity Board versus Mohan Lal & ors case, 1967 the Supreme Court held that the expression “other authorities” includes all Constitutional and statutory bodies on which powers are conferred by law. Thus, statutory or non - statutory authorities like LIC, ONGC, SAIL, etc. are included under the meaning of \\"the State.\\" Airports Authority of In dia (AAI) is a statutory body that was constituted by an Act of Parliament and came into being on 1st April 1995 by merging erstwhile National Airports Authority and International Airports Authority of India. Thus, it falls within the ambit of the ‘State’. So, point II is correct. The National Human Rights Commission (NHRC) is a statutory body established in 1993. It is responsible for protecting and promoting human rights and is included in the definition of State. So, point IV is correct. In Prem Garg vs. Excise Commissioner Himachal Pradesh, 1961 ., the Supreme Court held that when rule making power of the judiciary is concerned, it is ‘State’. The Courts fall within the definition of the ‘State’ only while performing the non - judicial functions. So, point III is not correct. In Rupa Ashok Hurra v. Ashok Hurra (2002) , the Supreme Court reaffirmed and ruled that no judicial proceeding could be said to violate any of the Fundamental rights and that it is a settled position of law that superior Courts of justice did not fall within the ambit of State or other authorities under Article 12. Knowledge Box Vertical and Horizontal Application of Rights: The doctrines of horizontal and vertical application of rights delineate the scope and enforcement of fundamental rights within a legal system. In India, these doctrines determine whether individuals can invoke Constitutional rights solely against the Stat e ( vertical application ) or also against other private individuals and entities ( horizontal application ). o Vertical Application of Rights : This traditional approach allows individuals to enforce fundamental rights against the State or its instrumentalities. The Indian Constitution primarily envisages this model, where citizens seek protection from State actions that infringe upon their righ ts. For instance, Article 12 defines “the State,” encompassing Government bodies against which fundamental rights can be claimed. o Horizontal Application of Rights : This concept extends the enforcement of fundamental rights to disputes between private individuals or entities. It posits that certain rights should be upheld not only in the public sphere but also in private interactions. In the Indian context, while th e Constitution predominantly supports vertical application, certain provisions imply horizontal applicability. A vertical approach provides weightage to individual autonomy, choice and privacy, while the horizontal approach seeks to imbibe Constitutional values in all individuals. These approaches which appear to be bipolar opposites raise the age - old question of ‘Individuals versus Society’."},{"id":60,"txt":"Consider the following statements regarding President’s Rule in State:\\n1. Once the President’s rule is declared in the State, its legislative assembly gets dissolved.\\n2. Once imposed, it can continue indefinitely in without any approval from the Parliament.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":3,"exp":"Ex: President’s Rule , also known as Constitutional Emergency, is a provision under Article 356 of the Constitution of India that allows the Central Government to assume direct control over a State’s governance. It can be imposed on the recommendations of the Governor that the State Governance cannot be carried out in a Constitutional manner in the prevalent scenario. In such a scenario, the President is empowered to take over the Executive power of the State with herself or to carry out the same through his appointed agents. At the same time the legislative power of the State gets vested with the Parliament. It must be noted here that the imposition of President’s rule in itself doesn’t mean that the Legislative assembly of the State is dissolved, it is just suspended. It gets dissolved only after the same is approved by the Parliament. So, statement I is not correct. The proclamation of imposition of President’s rule must be approved by both the Houses of Parliament within two months from the date of its issue. If approved, the President’s rule continues for six months. It can be extended for a maximum period of three years with the approval of the Parliament every six months. So, statement II is not correct. Therefore, option (d) is correct."},{"id":61,"txt":"Which of the following Fundamental Rights in India are available only to the citizens, and not to the foreigners?\\n1. Article 15\\n2. Article 25\\n3. Article 19\\n4. Article 29\\n5. Article 14\\n6. Article 21\\nSelect the correct answer using the code given below:","ref":"","opts":["I, III and IV only","II, III and VI only","I, II and IV only","III, IV and VI only"],"ci":0,"exp":"Ex: The Fundamental Rights are enshrined in Part III of the Constitution from Articles 14 to 32. Some of these rights are available only to the citizens of India while others are available to both citizens as well as foreigners. The Fundamental Rights which are available only to the citizens include: Article 15: Right against discrimination on grounds of religion, race, caste, sex or place of birth. So, point I is correct. Article 16 : Right to equality of opportunity in the matters of public employment. Article 19 : Six rights regarding freedom include freedom of (i) speech and expression, (ii) assembly, (iii) association, (iv) movement, (v) residence, and (vi) profession. So, point III is correct. Article 29: Protection of language, script and culture of minorities. So, point IV is correct. Article 30: Right of minorities to establish and administer educational institutions. Article 25 says that all persons are equally entitled to freedom of conscience and the right to freely profess, practice and propagate religion. These rights are available to all persons – citizens as well as non - citizens. So, point II is not correct. Article 14 says that the State shall not deny to any person equality before the law or the equal protection of the laws within the territory of India. This provision confers rights on all persons whether citizens or foreigners . So, point V is not correct. Article 21 provides for Protection of Life and Personal Liberty. It says that no person shall be deprived of his life or personal liberty except according to procedure established by law. This fundamental right is available to every person, citizens and foreigners alike . So, point VI is not correct."},{"id":62,"txt":"Consider the following statements:\\n1. The Parliament is empowered to provide for the use of any language other than English to be used for the proceedings of the Supreme Court.\\n2. The Governor of a State can authorize the use of the Hindi or any other language in proceedings of the High Court.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":2,"exp":"Ex: According to Article 348(1)(a) of the Constitution of India, the language to be used in the Supreme Court is English only, unless otherwise provided by the Parliament. This implies that, Parliament by law can make the Supreme Court use any language for its proceedings, until then English would be the sole language of business in the Supreme Court. So, statement I is correct. For the High Courts, the Governor of the State with the previous consent of the President, can authorize the use of the Hindi language, or any other language used for any official purposes of the State, in proceedings in the High Court. So, statement II is correct. It should be noted here that, this provision only extends for proceedings. For judicial decrees and orders to be issued in regional languages, the Governor under the Official Languages Act, 1963 can provide for the use of any language for decrees and order s of the High Court."},{"id":63,"txt":"Which one of the following is not correct regarding the Constitutional status of cooperative societies?","ref":"","opts":["ooperative societies is a subject under the List II of the Seventh Schedule of the Constitution.","Forming a cooperative society is Fundamental Right granted to the citizens.","ny person can become a member of a Cooperative society as a matter of Constitutional Right.","The Central Government can legislate for cooperative societies operating in more than one State."],"ci":2,"exp":"Ex: Co - operative Societies in India has a Constitutional status, the 97 Constitutional Amendment Act, 2011 gave explicit Constitutional recognition to these societies, whilst adding Part IXB to the Constitution, dealing exclusively with matters of Cooperatives in India. Co - operative societies fall under Entry 32 of the State List (List II) in the Seventh Schedule of the Constitution . Hence, regulation and governance of cooperative societies fall primarily under the jurisdiction of State Legislatures. So, option a is correct. Initially, the 97th Amendment inserted Part IXB (Articles 243ZH to 243ZT), making certain provisions mandatory for all States. However, in its 2021 judgment ( Rajendra N. Shah versus the Union of India ), the Supreme Court held that since cooperative societies are a State subject, the Amendment should have been ratified by at least half of the State Legislatures under Article 368(2). Since such ratification was not done, Part IXB is not binding on the States for matters falling under their exclusive jurisdict ion . The 97th Amendment added Article 19(1)(c) to Part III of the Constitution, which made forming cooperative societies a part of the fundamental right to form associations or Unions or cooperative societies . So, option b is correct. It should be noted here that forming a cooperative society is a Constitutional Right but being a member of the same is not a Right as guaranteed by the Constitution, the same is governed by the respective laws of the State related to cooperatives. So, option c is not correct. The Multi - State cooperatives fall in the jurisdiction of the Union Government via Entry 44 (Corporations whether trading or not, with objects not confined to one State) of the Union list (List I), hence the Central Government can make laws regarding the same. So, option d is correct."},{"id":64,"txt":"Consider the following pairs: Constituent Chairman Assembly Committee\\n1. House Committee B. Pattabhi Sitaramayya\\n2. Linguistic Provinces S.K. Dhar Commission\\n3. Committee on Vallabhbhai Patel Fundamental Rights\\n4. Steering Committee Dr. Rajendra Prasad\\nSelect the correct answer using the code given below:","ref":"","opts":["I, II and III only","II, III and IV only","I and IV only","I, II, III and IV G S T est – 02 – Polity ( V 7702)"],"ci":3,"exp":"Ex: The Constituent Assembly of India appointed several committees, each having specific functions during the drafting of the Constitution. House Committee: It was chaired by B. Pattabhi Sitaramayya . This committee looked after the accommodation and other arrangements for the members of the Constituent Assembly. It handled the internal management of housing and logistics during the sessions. So, pair I is correctly matched. Linguistic Provinces Commission: This commission was appointed to examine the feasibility of reorganizing States on a linguistic basis. S.K. Dhar was appointed as its Chairman. So, pair II is correctly matched. Committee on Fundamental Rights: It was tasked to define and draft the Fundamental Rights, and was chaired by Sardar Vallabhbhai Patel. The recommendations of this committee laid the foundation for Part III of the Constitution. So, pair III is correctly matched. Steering Committee: It was responsible for coordinating the work of various committees and streamlining the Constituent Assembly’s business. It was chaired by Dr. Rajendra Prasad, who was also the President of the Constituent Assembly. So, pair IV is correctly matched. Subject: Polity | Features of the Constitution Tags: Factual"},{"id":65,"txt":"The Constitution of India explicitly provides for\\nwhich of the following duties to be performed by the Centre in relation to the States?\\n1. To preserve the existing boundaries and the territorial integrity of the States\\n2. To protect the States against internal disturbances\\n3. To provide financial assistance to all the States\\n4. To ensure that the Government in the States is being carried in accordance with the Constitution\\n5. To protect the interests of the States at the Union level\\nSelect the correct answer using the code given below:","ref":"","opts":["I, II and III only","II and IV only","III, IV and V only a","I and IV only"],"ci":1,"exp":"Ex: Article 355 of the Constitution of India says that “It shall be the duty of the Union to protect every State against external aggression and internal disturbance and to ensure that the Government of every State is carried on in accordance with the provisions of this Constitution.” Thus Article 355 of the Indian Constitution imposes two duties on the Union in relation to the States: To protect every State against external aggression and internal disturbance. So, point II is correct. To ensure that the Government of every State is carried on in accordance with the provisions of this Constitution. So, point IV is correct. Article 3 of the Constitution allows the Parliament to form new States by alternating the areas, boundaries or names of existing States . Thus, the boundaries and the territories of the States are not guaranteed. There is no mentioned duty in the Constitution of the Union to preserve the existing boundaries and the territorial integrity of the States. So, point I is not correct. Article 275 of the Constitution authorises the Parliament to provide grants - in - aid to the States who are in need of financial assistance, and not to every State. But, it is not a duty imposed on the Parliament. So, point III is not correct. There are certain institutions like the Rajya Sabha which are meant to protect the interests of the States at the Union level. But such a duty is not explicitly mentioned in the Constitution of India. So, point V is not correct."},{"id":66,"txt":"Which one of the following parts of the Constitution of India provides for positive rights to the Citizens?","ref":"","opts":["Part II","Part III","Part IV","Part XX"],"ci":2,"exp":"Ex: Rights as being granted to citizens of the country can be classified into positive or negative, on the basis of them imposing limitations or empowering the Legislatures to take certain steps or make laws or regulations . o Positive rights , require the Government and the Legislature to act in a certain way or make laws for providing the Citizens certain rights o Negative rights require the Government to refrain from acting in a certain way and put limitations on its law making power. In essence, the Governments are expected to respect individual rights by doing nothing at all. The Directive Principles of State Policy are considered positive rights because they impose obligations on the State to take affirmative action for achieving socio - economic justice . They aim to ensure that the Government actively works to provide basic needs, welfare, and opportunities to its citizens, unlike Fundamental Rights which mostly protect citizens from State interference (negative rights)."},{"id":67,"txt":"Consider the following:\\n1. Should have achieved a minimum age of 35 years.\\n2. Should have held a judicial office for at least five years in the territory of India.\\n3. Should have been an advocate in the High Court for ten years.\\n4. Should be a distinguished jurist in the opinion\\nof the President of India For becoming a judge for a High Court in India,\\nhow many of the above qualifications need to be fulfilled by an individual?","ref":"","opts":["Only one","Only two","Only three","ll the four"],"ci":0,"exp":"Ex: Article 124 and Article 217 of the Constitution of India provides for the qualification of judges for both the Supreme Court and the High Courts respectively. A person to be appointed as a judge of the High Court by the President of India, should have the following qualifications: He/she should be a citizen of India. Either ■ He should have held a judicial office in the territory of India for ten years. So, point II is not correct. ■ He should have been an advocate of a High Court (or High Courts) for ten years . So, point III is correct. The Constitution does not prescribe for a minimum age for appointment as a judge of the High Court. So, point I is not correct. Unlike in the case of the Supreme Court, the Constitution makes no provision for appointment of a distinguished jurist as a judge of a High Court. So, point IV is not correct. So, for becoming a judge for a High Court in India, only one of the above qualifications need to be fulfilled by any individual."},{"id":68,"txt":"With reference to the Overseas Citizenship of India (OCI) cardholders, which of the following statements are correct?\\n1. Only a Person of Indian Origin can be registered as an OCI.\\n2. Indian civil and criminal laws are not applicable to an OCI living in India.\\n3. They can acquire agricultural property in India by way of purchase.\\n4. They are not entitled to vote in legislative elections in India.\\nSelect the correct answer using the code given below:","ref":"","opts":["I and III only","I and IV only","II and III only","II and IV only"],"ci":1,"exp":"Ex: The Overseas Citizen of India Cardholder Scheme provides for the registration of Persons of Indian Origin (PIO) as Overseas Citizens of India (OCI) . A person of Indian origin who is a foreign national and gets registered as OCI Cardholder under Section 7A of the Citizenship Act, 1955 is an OCI. The OCI Cardholder is a foreign national holding passport of a foreign country and is not a citizen of India . So, statement I is correct. The Indian civil/criminal laws are applicable to persons registered as OCI for the period of their stay in India. So, statement II is not correct. An OCI Cardholder can inherit and hold immovable property in India from a person who was resident in India. But, the OCI Cardholder cannot acquire agricultural land or farmhouse or plantation properties in India. So, statement III is not correct. The OCI Cardholder is not entitled to vote, be a member of Legislative Assembly or Legislative Council or Parliament , cannot hold Constitutional posts such as President, Vice President, Judge of Supreme Court or High Court etc. as specified in section 7B(2) of The Citizenship Act, 1955. The OCI Cardholder shall not be entitled for appointment to public services and post s in connection with the affairs of the Union or of any State except for appointment in such services and posts as the Central Government may, by special order, on that behalf specify. So, statement IV is correct. Knowledge Box The Citizenship (Amendment) Act, 2003 , made provision for acquisition of Overseas Citizenship of India (OCI) by the PIOs. The Citizenship (Amendment) Act, 2015, has modified the provisions pertaining to the OCI in the Principal Act. It has introduced a new scheme called “Overseas Citizen of India Cardholder” by merging the PIO card scheme and the OCI card scheme. Following categories of foreign nationals are eligible for registration as Overseas Citizen of India (OCI) Cardholder: - Any person of full age and capacity: - ■ who is a citizen of another country, but was a citizen of India at the time of, or at any time after the commencement of the Constitution 1.e. 26.01.1950; or ■ who is a citizen of another country, but was eligible to become a citizen of India at the time of the commencement of the Constitution i.e. on 26.01.1950; or ■ who is a citizen of another country, but belonged to a territory that became part of India after 15.08.1947; or ■ who is a child or a grandchild or a great grandchild of such a citizen; or A person, who is a minor child of a person mentioned above A person, who is a minor child, and whose both parents are citizens of India or one of the parents is a citizen of India Spouse of foreign origin of a citizen of India or spouse of foreign origin of an Overseas Citizen of India Cardholder A person registered as OCI is eligible for Indian citizenship if he/she is registered as OCI Cardholder for five years and is ordinarily resident in India for twelve months before making an application for registration. The OCI Cardholders are entitled to certain benefits like: Multiple entry lifelong visa for visiting India for any purpose Exemption from registration with Foreigners Regional Registration Officer (FRRO) or Foreigners Registration Officer (FRO) for any length of stay in India. Parity with Non - Resident Indians (NRIs) in respect of all facilities available to them in economic, financial, and educational fields except in matters relating to the acquisition of agricultural or plantation properties. Registered Overseas Citizen of India Cardholders shall be treated at par with Non - Resident Indians in the matter of inter - country adoption of Indian children. Registered Overseas Citizen of India Cardholders shall be treated at par with resident Indian nationals in the matter of tariffs in air fares in domestic sectors in India."},{"id":69,"txt":"Consider the following statements regarding the power of the Parliament to amend the Constitution of India:\\n1. The amending power of the Parliament arises only from Part XX of the Constitution of India.\\n2. The Doctrine of Basic Structure is the only limitation on the amending power of the Parliament.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II G S T est – 02 – Polity ( V 7702)"],"ci":1,"exp":"Ex: Article 368 in Part XX of the Constitution of India deals with the powers of Parliament to amend the Constitution. It says that the Parliament may in exercise of its constituent power amend by way of addition, variation or repeal any provision of this Cons titution. Article 368 provides for two types of amendments: Those amended by a special majority of both the houses of the Parliament. Those amended by a special majority of the Parliament and with the ratification by at least half of the total States. The Parliament derives its amending powers from Article 368 as well as from Article 245, 246 and 248 which confer on the Parliament powers to make laws . So, statement I is not correct. In the Kesavananda Bharati Case (1973), the Supreme Court ruled that the constituent power of Parliament under Article 368 does not enable it to alter the ‘basic structure’ of the Constitution. The present position is that the Parliament under Article 368 can amend any part of the Constitution including the Fundamental Rights but without affecting the ‘basic structure’ of the Constitution. The basic structure doctrine has thus placed limits on the power of the Parliament to amend the Constitution, and it is the only limitation on the amending powers of the Parliament. In fact, the limited amending power of Parliament is one of the basic features of the Constitution. So, statement II is correct."},{"id":70,"txt":"With reference to the Ninth Schedule of the Constitution of India, consider the following statements:\\n1. It was added to the Constitution by the 1 st Constitutional Amendment Act of 1951.\\n2. Laws included in it can not be challenged in a Court on the ground of being violative of the Constitution.\\n3. Any changes to it require an amendment to the Constitution under Article 368.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","I and III only","II and III only","I, II and III"],"ci":1,"exp":"Ex: The Ninth Schedule contains a list of Central and State laws which cannot be challenged in Courts . As of now, there are nearly 280 Central as well as State laws under the schedule. Article 31B of the Constitution saves the acts and regulations included in the Ninth Schedule from being challenged and invalidated on the ground of contravention of any of the Fundamental Rights. Article 31B along with the Ninth Schedule was added by the 1st Constitutional Amendment Act of 1951. So, statement I is correct. In a significant judgement delivered in I.R. Coelho case (2007) , the Supreme Court ruled that t here could not be any blanket immunity from judicial review of laws included in the Ninth Schedule. The Court held that judicial review is a ‘basic feature’ of the Constitution and it could not be taken away by putting a law under the Ninth Schedule. The Supreme Court has held that all laws included in the Ninth Schedule would be open to Judicial Review if they violated the basic structure of the Constitution . The Court further ruled that the laws placed under Ninth Schedule after April 24, 1973 (the date of the Keshavananda Bharathi judgement) shall be open to challenge in Court if they violated any of the provisions under the Basic Structure Doctrine of the Constitution. So, statement II is not correct. Laws can be added to or removed from the Ninth Schedule through Constitutional amendments. Amendments to the Ninth Schedule of the Indian Constitution require a special majority in Parliament, specifically a majority of more than half of the total membership of each House and a majority of two - thirds of the members present and voting. This is in accordance with Article 368 of the Constitution. So, statement III is correct."},{"id":71,"txt":"Which of the following jurisdictions is enjoyed by the High Courts in India, but not by the Supreme Court of India?","ref":"","opts":["ppellate jurisdiction","dvisory Jurisdiction","Supervisory Jurisdiction","Writ Jurisdiction"],"ci":2,"exp":"Ex: The Constitution of India establishes an integrated judicial scheme in India under which there is a hierarchical and functional relationship where High Courts supervise subordinate Courts (Article 227), and the Supreme Court, as the highest judicial authority. Both the Supreme Court and the High Courts have appellate jurisdiction in case of civil and criminal matters . The Supreme Court is primarily a Court of appeal and hears appeals against the judgements of the lower Courts over both civil and criminal matters. A High Court is primarily a Court of appeal. It hears appeals against the judgments of subordinate Courts functioning in its territorial jurisdiction. It has appellate jurisdiction in both civil and criminal matters. The Supreme Court has special advisory jurisdiction in matters which may specifically be referred to it by the President of India under Article 143 . The Article authorizes the President to seek the opinion of the Supreme Court on any question of law or fact of public importance, or on any dispute arising out of any pre - Constitutional treaty or agreement. The High Courts have no such advisory jurisdic tion. The High Courts have Supervisory Jurisdiction, but not the Supreme Court of India . A High Court, under Article 227, has the power of superintendence over all Courts and tribunals functioning in its territorial jurisdiction. Thus, the High Court may call for returns from such Courts; make and issue general rules and prescribe forms for regulating the practice and proceedings of such Courts; and prescribe forms in which books, entries and accounts shall be kept by the officers of any such Courts. Such power of superintendence is absent in the Supreme Court , which being the highest Constitutional Court, was never intended to supervise subordinate Courts or the High Courts. In the Tirupati Balaji Developers (P) Ltd v. State of Bihar Case , the Supreme Court itself has ruled that the High Court is not a Court “subordinate” to the Supreme Court and t he power of superintendence is only granted to High Courts and not to the Supreme Court. So, point c is correct. Writ Jurisdiction is the power of the Supreme Court and the High Courts to issue writs for the enforcement of the rights of the people. Both the Supreme Court and the High Courts are empowered to issue writs for the enforcement of the Fundamental Rights. But, there is a difference between the writ jurisdiction of the Supreme Court and that of the High Courts. The Supreme Court can issue writs only for the enforcement of fundamental rights whereas the High Courts can issue writs not only for the enforcement of the fundamental rights but also for any other purpose. The phrase ‘for any other purpose’ refers to the enforcement of an ordinary legal right. Thus, the Writ Jurisdiction of the Supreme Court does not extend to a case where the breach of an ordinary legal right is alleged."},{"id":72,"txt":"Which of the following statements are correct\\nwith regard to the procedure for the removal of a judge of the Supreme Court of India?\\n1. A judge of the Supreme Court can only be removed on the grounds of misbehaviour or incapacity.\\n2. The presiding officer of the House cannot refuse to admit a motion meant for the removal of a judge.\\n3. A judge can be removed only if a motion is passed by both the Houses of the Parliament by a special majority.\\n4. The resolution passed by the Parliament for removal of judges must be addressed to the President during the same session only.\\nSelect the correct answer using the code given below:","ref":"","opts":["I and III only","II, III and IV only","I and II only","I, III and IV only"],"ci":3,"exp":"Ex: The Article 124 of the Constitution of India provides that a judge of the Supreme Court or High Court can be removed only by an order of the President. The President can issue the removal order only if Parliament has passed a motion for such removal. The procedure for removal of judges is elaborated in the Judges Inquiry Act, 1968. A motion for the removal of a judge of the Supreme Court may originate in either house of Parliament. To initiate proceedings: (i) at least 100 members of Lok Sabha may give a signed notice to the speaker, or (ii) at least 50 members of Rajya Sabha may giv e a signed notice to the chairman. A judge of the Supreme Court or High Court may be removed from office on grounds of ‘proven misbehaviour or incapacity’. If the impeachment motion is admitted, the speaker/chairman will constitute a three - member committee to investigate the complaint. It will comprise: (i) a Supreme Court judge; (ii) chief justice of a high Court; and (iii) a distinguished jurist. The commi ttee will frame charges based on which the investigation will be conducted. So, statement I is correct. The Speaker of Lok Sabha or Chairman of Rajya Sabha may consult individuals and examine relevant material related to the notice. Based on this, the Speaker/Chairman may decide to either admit the motion or refuse to admit it. Thus, the chairman/speaker can reject the motion. So, statement II is not correct. The motion for removal of a judge is required to be adopted by each house of parliament by special majority i.e. (i) a majority of the total membership of that house; and (ii) a majority of at least two - thirds of the members of that house present and voting. So, statement III is correct. Once the motion is adopted in both houses, it is addressed to the President. The address has to be presented to the President in the same session. The President then issues an order for the removal of the judge. So, statement IV is correct."},{"id":73,"txt":"Which of the following Writs cannot be issued against a private individual?\\n1. Mandamus\\n2. Certiorari\\n3. Prohibition\\n4. Habeas Corpus\\n5. Quo-Warranto\\nSelect the correct answer using the code given below:","ref":"","opts":["I, II and V only","II, III, and IV only","I, II, III and V only","I, III and V only"],"ci":2,"exp":"Ex: The Supreme Court and the High Courts in India are empowered to issue writs including Habeas Corpus, Mandamus, Prohibition, Quo warranto and Certiorari for the enforcement of the fundamental rights of an aggrieved citizen. Mandamus is a command issued by the Court to a public official asking him/her to perform his/her official duties. It can also be issued against any public body, a corporation, an inferior Court, a tribunal or Government. The writ of mandamus cannot be issued against a private individual. So, point I is correct. The writ of Certiorari is issued by a higher Court to a lower Court or tribunal either to transfer a case pending with the latter to itself or to squash the order of the latter in a case. Previously, the writ of certiorari could be issued only against judicial and quasi - judicia l authorities and not against administrative authorities. However, in 1991, the Supreme Court ruled that the certiorari can be issued even against administrative authorities affecting rights of individuals. Certiorari is not available against legislative bodies and private individuals or bodies. So, point II is correct. Prohibition is issued by a higher Court to a lower Court or tribunal to prevent the latter from continuing proceedings in a case. The writ of Prohibition is issued by a higher Court (High Court or Supreme Court) when a lower Court has considered a case going beyond i ts jurisdiction. It is issued by a higher Court to a lower Court or tribunal to prevent the latter from exceeding its jurisdiction that it does not possess. The writ of prohibition can be issued only against judicial and quasi - judicial authoriti es. It is not available against administrative authorities, legislative bodies, and private individuals or bodies. So, point III is correct. Habeas Corpus is an order issued by the Court to a person who has detained another person, to produce the body of the latter before it. The writ of habeas corpus can be issued against both public authorities as well as private individuals. So, point IV is not correct. Quo - Warranto is issued by the Court to enquire into the legality of claim of a person to a public office. The writ can be issued only in case of a substantive public office of a permanent character created by a statute or by the Constitution. It cannot be issued in ca ses of ministerial office or private office. It cannot be issued against private individuals. So, point V is correct."},{"id":74,"txt":"Which of the following provision(s) were added to the Constitution of India via the 44th Constitutional Amendment Act?\\n1. A national emergency can be imposed on the ground of armed rebellion.\\n2. The President can declare a national emergency only after receiving a written recommendation from the Cabinet.\\n3. The President through declaration can revoke a national emergency.\\n4. A proclamation of emergency can be made for the whole of the country or any part of it.\\n5. Emergency that is proclaimed on the ground of external aggression cannot be challenged in a Court of law.\\nSelect the correct answer using the code given below:","ref":"","opts":["I and II only","I, III and V only","II, III and V only","I, II and IV only G S T est – 02 – Polity ( V 7702)"],"ci":0,"exp":"Ex: Article 352 of the Indian Constitution empowers the President to declare a national emergency when the security of India or a part of it is threatened by war or external aggression or armed rebellion. Originally, the Constitution mentioned ‘internal disturbance’ as the ground for the proclamation of a National Emergency, but the expression was too vague and had a wider connotation. Hence, the 44th Amendment Act of 1978 substituted the words ‘armed rebellion’ for ‘internal disturbance’. So, statement I is correct. A proclamation of emergency may be revoked by the President at any time by a subsequent proclamation. Such a proclamation does not require parliamentary approval. This provision was there in the original Constitution, and was not added by the 44th Amendment . So, statement III is not correct. A proclamation of national emergency may be applicable to the entire country or only a part of it. This was provided by the 42nd Amendment Act of 1976. It enabled the President to limit the operation of a National Emergency to a specific part of India. So, statement IV is not correct. The 38th Amendment Act of 1975 made the declaration of a National Emergency immune from the judicial review. It provided that the satisfaction of the President in the imposition of National Emergency shall be final and conclusive and shall not be questioned in any Court on any ground. However, this provision was subsequently deleted by the 44th Amendment Act of 1978. So, statement V is not correct. Other changes made by the 44th Amendment Act: The President can proclaim a national emergency only after receiving a written recommendation from the cabinet. So, statement II is correct. The proclamation of Emergency must be approved by both the Houses of Parliament within one month from the date of its issue. (Earlier this period was two months) Approval of the Parliament is needed after every six months. A Special Majority of each house of Parliament is needed for approving the proclamation of emergency. Revocation of Emergency if the Lok Sabha passes a resolution disapproving its continuation. If one - tenth of the total Lok Sabha members give a written notice to the Speaker, then a special sitting of the House should be held within 14 days for the purpose of considering a resolution disapproving the continuation of the proclamation."},{"id":75,"txt":"Consider the following statements:\\nStatement I: In India the domicile status of a person does not change even when he moves out of his State of domicile to permanently reside in another State.\\nStatement II: In India, there is a unified legal system which extends throughout the country.\\nWhich one of the following is correct in respect of the statements given above?","ref":"","opts":["oth Statement I and Statement II are correct and Statement II explains Statement I","oth Statement I and Statement II are correct, but Statement II does not explain Statement I","Statement I is correct, but Statement II is not correct","Statement I is not correct, but Statement II is correct"],"ci":0,"exp":"Ex: Domicile in normal parlance denotes ‘the place of living’ or permanent residence. However, ‘Domicile’ is primarily a legal concept for the purposes of determining what ‘personal law’ is applicable to an individual. In India, each citizen of this country carries with him or her, one single domicile which is the ‘Domicile in India’. The Supreme Court Dr. Pradeep Jain versus Union of India, 1984 itself has said that it is clear on a reading of the Constitution that it recognises only one domicile, namely, domicile in India. Article 5 of the Constitution is clear and explicit on this point and it refers only to one domicile, namely, “domicile in the territory of India.” The concept of regional or provincial domicile is alien to the Indian legal system. The Supreme Court further said that when a person who is permanently resident in one State goes to another State with intention to reside there permanently or indefinitely, his domicile does not undergo any change , he does not acquire a new domicile of choice. His domicile remains the same, namely, Indian domicile . So, statement I is correct. The Supreme Court pointed out that the system of only one domicile is in consonance with the fact that India has also one single unified legal system which extends throughout the country. It is not possible to say that a distinct and separate system of law prevails in each State forming part of the Union of India. The legal system which prevails throughout the territory of India is one single indivisible system. The Court further pointed out that ‘it is true that with respect to subjects set out in List II of the Seventh Schedule to the Constitution, the States have the power to make laws and subject to the overriding power of Parliament, the State can also make l aws with respect to subjects enumerated in List III of the Seventh Schedule to the Constitution, but the legal system under which such laws are made by the States is a single legal system which may truly be described as the Indian legal system. So, stateme nt II is correct. So, both statement - I and statement - II are correct and statement - II is the correct explanation for statement - I. postgraduate (PG) medical admissions within the state quota are unconstitutional"},{"id":76,"txt":"Consider the following:\\n1. Institutions wholly maintained by the State\\n2. Institutions administered by the State but established under any endowment or trust\\n3. Institutions recognized by the State\\n4. Institutes receiving aid from the State\\nIn how many of the above institutions does the imparting of religious instructions are completely prohibited for the purpose of Article 28 of the Constitution of India?","ref":"","opts":["Only one","Only two","Only three","ll the four"],"ci":0,"exp":"Ex: Under Article 28 of the Constitution of India , no religious instruction shall be provided in any educational institution maintained wholly out of State funds. However, this provision shall not apply to an educational institution administered by the State but established under any endowment or trust, requiring imparting of religious instruction in such institution. Further, no person attending any educational institution recognised by the State or receiving aid out of State funds shall be required to attend any religious instruction or worship in that institution without its consent. Thus, Article 28 distinguishes between four types of educational institutions: Institutions wholly maintained by the State: No type of religious instruction can be given in these institutions and any such instruction is completely prohibited. So, point I is correct. Institutions administered by the State but established under any endowment or trust: In these institutions there is nor restriction on imparting of religious instruction. So, point II is not correct. Institutions recognised by the State: In these institutions religious instruction is permitted on a voluntary basis. So, point III is not correct. Institutions receiving aid from the State: In these institutions religious instruction is permitted on a voluntary basis. So, point IV is not correct. So, in only one of the above institutions does the imparting of religious instructions is completely prohibited for the purpose of Article 28 of the Constitution of India."},{"id":77,"txt":"With reference to the implications of the imposition of a National Emergency on the Fundamental Rights of citizens, consider the following statements:\\nStatement I: During a National Emergency, Fundamental Rights of citizens can be restricted.\\nStatement II: Article 359 allows the suspension of all the Fundamental Rights during the Emergency. Statements III: Article 359 comes into force as soon as the proclamation of National Emergency is made on the grounds of external aggression.\\nWhich one of the following is correct in respect of the statements given above?","ref":"","opts":["oth statement II and statement III are correct and both of them explain statement I.","oth statement II and statement III are correct, but only one of them explains statement I.","Only one of the statements II and III is correct, and that explains statement I.","Neither Statement II nor statement III is correct."],"ci":3,"exp":"Ex: Articles 358 and 359 describe the effect of a National Emergency on the Fundamental Rights of the Citizens. During the proclamation of Emergency, the Fundamental Rights of Indian citizens as guaranteed by the Constitution of India gets restricted as an implication of Article 358 and 359. So, statement I is correct. Article 359 empowers the President to suspend the right to move any Court for the enforcement of the rights conferred by Part III. It authorises the President to suspend the right to move any Court for the enforcement of Fundamental Rights during a National Emergency. Hence, it is not the right which is suspended but the enforcement of the same. So, statement II is not correct. The suspension of enforcement relates to only those Fundamental Rights that are specified in the Presidential Order. However, the President cannot suspend the right to move the Court for the enforcement of fundamental rights guaranteed by Articles 20 to 21 . In other words, the right to protection in respect of conviction for offences (Article 20) and the right to life and personal liberty (Article 21) remain enforceable even during an emergency. Article 359 does not automatically suspend any Fundamental Right. It does not come into force as soon as the proclamation of National Emergency is made. It only empowers the President to suspend the enforcement of the specified Fundamental Rights. Article 359 comes into force only when the President issues an order providing for the suspension of enforcement of the specified fundamental rights. So, statement III is not correct. Article 359 authorises the President to suspend the right to move any Court for the enforcement of Fundamental Rights during a National Emergency. Such a suspension could be for the entire period of operation of emergency or for a shorter period as mentioned in the order . Also, the suspension order may extend to the whole or any part of the country. It should be laid before each House of Parliament for approval. So, neither Statement - II nor statement - III is correct. Knowledge Box Article 358 deals with the suspension of the Fundamental Rights guaranteed by Article 19. According to Article 358, when a proclamation of national emergency is made, the six Fundamental Rights under Article 19 are automatically suspended. No separate order for their suspension is required. While a proclamation of national emergency is in operation, the State is freed from the restrictions imposed by Article 19. When the National Emergency ceases to operate, Article 19 automatically revives and comes into force. However, the six Fundamental Rights under Article 19 can be suspended only when the National Emergency is declared on the ground of war or external aggression and not on the ground of armed rebellion."},{"id":78,"txt":"In which of the following situations will the President’s Rule imposed in a State be deemed improper?\\n1. The State Government is accused of maladministration or corruption.\\n2. The State Government is pursuing anti- secular activities.\\n3. The Governor makes an assessment that the Government has lost the majority in the Legislature without allowing it to prove majority on the floor of the Assembly\\nSelect the correct answer using the code given below:","ref":"","opts":["I and II only","II and III only","I and III only","I, II and III G S T est – 02 – Polity ( V 7702)"],"ci":2,"exp":"Ex: As per Article 356 of the Constitution of India, the President of India can proclaim President's Rule in a State, if he/she is satisfied that a situation has arisen in which the Government of a State cannot be carried on in accordance with the provisions of the Constitution. Since 1950, the President’s Rule has been imposed on many occasions. On a number of occasions, the President’s Rule has been imposed in an arbitrary manner for political or personal reasons. Hence, Article 356 has become one of the most controversial provi sions of the Constitution. Thus in Bommai Case (1994) , the Supreme Court enlisted the situations where the exercise of power under Article 356 could be proper or improper. The imposition of President’s Rule in a State would be proper in the following situations: After general elections to the assembly, no party secures a majority. When the party having a majority in the assembly declines to form a ministry and the governor cannot find a coalition ministry. When a ministry resigns after its defeat in the assembly and no other party is willing or able to form a ministry commanding a majority in the assembly. When a Constitutional direction of the Central Government is disregarded by the State Government. Internal subversion: for example, when a Government is deliberately acting against the Constitution. Physical breakdown: when the Government wilfully refuses to discharge its Constitutional obligations endangering the security of the State. The imposition of President’s Rule in a State would be improper under the following situations: When the Governor recommends imposition of President’s Rule without probing the possibility of forming an alternative ministry. When the Governor makes his own assessment of the support of a ministry in the assembly and recommends imposition of President’s Rule without allowing the ministry to prove its majority on the floor of the Assembly. So, point III is correct. The ruling party enjoying majority support in the assembly has suffered a massive defeat in the general elections to the Lok Sabha. Internal disturbances not amounting to internal subversion or physical breakdown. Maladministration in the State or allegations of corruption against the ministries or stringent financial exigencies of the State. So, point I is correct. When the State Government is not given prior warning to rectify itself except in case of extreme urgency leading to disastrous consequences. When the power is used to sort out intraparty problems of the ruling party, or for a purpose extraneous or irrelevant to the one for which it has been conferred by the Constitution. In the same case, the Court upheld the validity of President’s Rule imposed on certain States on the ground that secularism is a ‘basic feature’ of the Constitution. Thus the imposition of President’s Rule on a State on the basis of the fact that the State Government is pursuing anti - secular activities in the State would not be deemed improper. So, point II is not correct."},{"id":79,"txt":"In context to the fundamental rights of the citizens of India, which of the following Articles of the Indian Constitution imposes restrictions on the Executive but not on the Legislature at all?","ref":"","opts":["rticle 24","rticle 20","rticle 21","rticle 15"],"ci":2,"exp":"Ex: Article 21 of the Indian Constitution provides for protection of life and personal liberty. It says that no person shall be deprived of his life or personal liberty except according to the procedure established by law. A classification of fundamental rights may be made from the standpoint of the extent of limitation imposed on the Legislature. Article 21, for instance, is addressed against the Executive but imposes no limitation on the Legislature at all. ■ Article 21 simply says that no person shall be deprived of his life or personal liberty except according to procedure established by law. ■ It was held by the Supreme Court that a competent Legislature is entitled to lay down any procedure for the deprivation of personal liberty. ■ Thus, the object of Article 21 is not to impose any limitation upon the legislative power but only to ensure that the Executive does not take away a man's liberty except under the authority of a valid law , and in strict conformity with the procedure laid down by such law. So, point c is correct. There are other Fundamental Rights which are intended as absolute limitations upon the legislative power so that it is not open to the Legislature to regulate the exercise of such rights, e.g., the rights guaranteed by Arts. 15, 17, 18, 20, 24. There are also other rights like Article 19 which itself empowers the Legislature to impose reasonable restrictions upon the exercise of these rights."},{"id":80,"txt":"Which of the following fall under the original jurisdiction of the Supreme Court of India?\\n1. Matters involving the election of the Speaker\\nof the Lok Sabha\\n2. Disputes between the Central and the State Governments\\n3. Enforcement of the Fundamental Rights of a Citizen\\nSelect the correct answer using the code given below:","ref":"","opts":["I only","I and III only","II and III only","I, II and III"],"ci":2,"exp":"Ex: Exclusive Jurisdiction means, no other Court can decide such disputes. Original Jurisdiction means the power to hear such disputes in the first instance, not by way of appeal. Article 131 of the Constitution of India deals with the Original jurisdiction of the Supreme Court of India. The Supreme Court of India has exclusive original jurisdiction to decide disputes between different units of the Indian Federation . This jurisdiction of the Supreme Court is Exclusive, means that no other Court can decide such disputes. So, point II is correct. Its exclusive original jurisdiction extends to any dispute: between the Centre and one or more States, or between the Centre and any State or States on one side and one or more States on the other, between two or more States Disputes relating to the election of members of Parliament, including speaker, and state Legislatures can be heard by High Courts as well under their original jurisdiction. So, point I is not correct. In addition to Article 131, Article 32 of the Part III of the Constitution gives an original jurisdiction to the Supreme Court for the enforcement of Fundamental Rights of the citizens . So, point III is correct."},{"id":81,"txt":"Which of the following comprises the collegium for the selection of Supreme Court judges in India?","ref":"","opts":["The Prime Minister of India, the Chief Justice of India, and the Union Law Minister","The Chief Justice of India and four senior most judges of the Supreme Court of India","The Chief Justice of India, four senior most judges of the Supreme Court, and the Secretary-General of the Supreme Court","The Chief Justice of India, the Speaker of the Lok Sabha, and the Attorney General of India"],"ci":1,"exp":"Ex: Article 124 of the Constitution says that every Judge of the Supreme Court shall be appointed by the President by warrant under his hand and seal after consultation with the Judges of the Supreme Court and of the High Courts in the States as the President may deem necessary. It further says that in the case of appointment of a Judge other than the Chief Justice, the Chief Justice of India shall always be consulted. In the First Judges Case (1982), the Supreme Court held that the consultation mentioned in the Article does not mean concurrence and it only implies change of views. In the Second Judges Case (1993), the Supreme Court ruled that the advice tendered by the Chief Justice of India is binding on the President in the matters of appointment of the judges of the Supreme Court. In the Third Judges Case (1998) , the Supreme Court opined that the consultation process to be adopted by the Chief justice of India requires ‘consultation of plurality judges’. The sole opinion of the chief justice of India does not constitute the consultation process. He should consult a collegium of four senior most judges of the Supreme Court Thus, the Collegium for the selection of Supreme Court judges comprises the Chief Justice of India (CJI) and four senior - most Judges (after the CJI) of the Supreme Court. The Chief Justice is the senior - most Judge of the Supreme Court."},{"id":82,"txt":"Consider the following statements regarding the Fundamental Duties:\\n1. They can be enforced only through suitable legislation.\\n2. They are non-justiciable in nature.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":1,"exp":"Ex: Fundamental Duties, inserted in the Constitution by the 42nd Amendment Act, 1976, serve as moral and civic obligations for every citizen of India. Unlike Directive Principles, Fundamental Duties are not dependent on any legislative action for citizens to follow them. They are directly applicable to citizens from the moment they were inserted into the Constitution . While certain legislations may be enacted to give better effect to some duties (like environmental laws), the duties themselves exist without the need for such laws. So, Statement I is not correct. Like Directive Principles, Fundamental Duties are non - justiciable. This means that no citizen can be legally prosecuted solely for not fulfilling these duties unless a specific law has been enacted by the Legislature to make any particular duty enforceable. Courts may consider them while interpreting laws but cannot enforce them independently. So, Statement II is correct. Even prior to the insertion of explicit Fundamental Duties via Article 51A in the Constitution of India, the Supreme Court in the Chandra Bhavan Boarding & Lodging versus the State of Mysore, 1969 stated that Part IV of the Constitution (Directive Principle of State Policy) make provision for the state to impose duties on citizens."},{"id":83,"txt":"Which one of the following is correct with regard to the Special Leave Petition (SLP)?","ref":"","opts":["It forms a part of the original jurisdiction of the Supreme Court.","The Supreme Court admits a SLP on account of being the Court of Record.","The Supreme Court cannot accept a SLP if the matter is pending before a High Court.","It is a discretionary power of the Supreme Court"],"ci":3,"exp":"Ex: The Constitution of India under Article 136 vests the Supreme Court with an exclusive power to grant special leave to appeal against any judgement or order or decree in any matter or cause passed or made by any Court/tribunal in the territory of India, in case any substantial question of law is involved or gross injustice has been done. It forms a part of the appellate jurisdiction of the Supreme Court . So, option a is not correct. It empowers the Supreme Court to grant special leave to appeal from any judgment, decree, determination, sentence or order in any cause or matter passed or made by any Court or tribunal in the territory of India. It is a discretionary power of the Supreme Court of India. So, it cannot be claimed as a matter of right. The Supreme Court may refuse to admit it by exercising its discretion. It is a ‘residual power’ vested in the Supreme Court. So, option d is correct. It does not apply to military tribunals. It can be granted in any judgement whether final or interlocutory. It can be granted against any Court or tribunal including a High Court. So, option c is not correct. It may be related to any matter – Constitutional, civil, criminal, income - tax, labour, revenue, advocates, etc As a Court of Record, the Supreme Court has two powers: The judgements, proceedings and acts of the Supreme Court are recorded for perpetual memory and testimony. It has power to punish for contempt of Court. So, option b is not correct."},{"id":84,"txt":"Consider the following statements regarding the Supreme Court in India:\\n1. The Constitution of India declares Delhi as the seat of the Supreme Court.\\n2. Only the Parliament can provide for additional benches of the Supreme Court in different places of the Country.\\n3. The Supreme Court of India was constituted on 26 January 1950.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I and III only","II only","I, II and III","III only"],"ci":0,"exp":"Ex: Article 130 of the Constitution of India says that the Supreme Court shall sit in Delhi. Thus, it declares Delhi as the seat of the Supreme Court. So, statement I is correct. Article 130 of the Constitution of India says that the Supreme Court shall sit in Delhi or in such other places or places, as the Chief Justice of India may appoint. He can take decisions in this regard only with the approval of the President . So, statement II is not correct. The Supreme Court of India succeeded the Federal Court established via the Government of India Act, 1935. It came into existence with the promulgation of the Constitution of India on 26th January 1950. So, statement III is correct."},{"id":85,"txt":"If the President exercises his\\\\her power under Article 143 of the Constitution and consults the Supreme Court on a matter of public importance, then which of the following is\\\\are correct?\\n1. The references made by the President must be decided by a Bench consisting of at least five judges.\\n2. The Supreme Court is bound to tender its opinion to the President on such a matter.\\n3. The opinion tendered by the Supreme Court would be binding on the President.\\nSelect the correct answer using the code given below:","ref":"","opts":["II only","I and III only","I only","II and III only G S T est – 02 – Polity ( V 7702)"],"ci":2,"exp":"Ex: Article 143 in the Constitution of India provides power to the President to consult the Supreme Court. It deals with the Supreme Court’s advisory jurisdiction. This article authorises the President to seek the opinion of the Supreme Court in the two categories of mat ters: On any question of law or fact of public importance which has arisen or which is likely to arise. In this case, the Supreme Court may tender or may refuse to tender its opinion to the President. The Supreme Court can refuse to express its advisory opinion if it is satisfied that it should not express its opinion. So, statement II is not correct. On any dispute arising out of any pre - Constitution treaty, agreement, covenant, engagement, sanad or other similar instruments. In this case, the Supreme Court is bound to tender its opinion to the President . In both of the above cases, the opinion expressed by the Supreme Court is only advisory and not a judicial pronouncement. Hence, it is not binding on the President ; he may follow or may not follow the opinion. So, statement III is not correct. Article 145(3) in Constitution of India says that “The minimum number of Judges who are to sit for the purpose of deciding any case involving a substantial question of law as to the interpretation of this Constitution or for the purpose of hearing any refe rence under article 143 shall be five.” Therefore, the Constitutional cases or references made by the President under Article 143 are decided by a Bench consisting of at least five judges. So, statement I is correct."},{"id":86,"txt":"With reference to Writ Jurisdiction of Courts,\\nconsider the following statements:\\n1. The Parliament can empower any Court within the territory of India to issue writs.\\n2. Writs, in India, can only be issued for the enforcement of Fundamental Rights.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":0,"exp":"Ex: Writ Jurisdiction is the power of the Supreme Court (under Article 32) and the High Courts (under Article 226) to issue writs for the enforcement of the rights of the people. The aggrieved person can directly go to the Supreme Court or High Courts which can issue the writs of habeas corpus, mandamus, prohibition, certiorari and quo warranto for the restoration of h is rights. Article 32 of the Constitution of India provides that the Parliament can empower any other Court to issue writs. However, this can be done without prejudice to the writ powers conferred on the Supreme Court. The Parliament thus can empower any other Court to issue writs. Since no such provision has been made so far, only the Supreme Court and the High Courts can iss ue the writs and not any other Court. So, statement I is correct. Both the Supreme Court and the High Courts are empowered to issue writs for the enforcement of the Rights. But, there is a difference between the writ jurisdiction of the Supreme Court and that of the High Courts. The Supreme Court can issue writs only for the enforcement of Fundamental Rights whereas the High Courts can issue writs not only for the enforcement of the Fundamental Rights but also for any other purpose. The phrase ‘for any other purpose’ refers to the enforcement of an ordinary legal right. T hus, the Writ Jurisdiction of the High Court extends to a case where the breach of an ordinary legal right is alleged. So, statement II is not correct."},{"id":87,"txt":"Consider the following:\\n1. Voting in elections\\n2. Renouncing practices derogatory to women\\n3. Abiding and respecting the National Song\\n4. Development of humanism\\n5. Providing Early Childhood Care for children below 6 years of age\\nHow many of the above are included under the Fundamental Duties as enshrined in Part IVA of the Constitution?","ref":"","opts":["Only two","Only three","Only four","ll the five"],"ci":0,"exp":"Ex: The Fundamental Duties listed under Article 51A of the Constitution prescribe certain moral and civic responsibilities for citizens, but not every desirable behavior is included in the list. Voting is a legal right and civic responsibility but is not mentioned as a Fundamental Duty under Article 51A. Citizens are encouraged to vote, but it is not Constitutionally mandated as a duty, though the same was recommended by the Swaran Singh Committee to be included in Fundamental Duties. So, point I is not correct. Article 51A(e) explicitly mentions that every citizen shall renounce practices derogatory to the dignity of women . This is directly part of the Fundamental Duties. So, point II is correct. Article 51A(a) requires respect for the Constitution, National Flag, and National Anthem, but the National Song ( Vande Mataram ) is not specifically mentioned. Therefore, respecting the National Song is not explicitly listed as a Fundamental Duty. So, point III is not correct. Article 51A(b) explicitly mentions the duty of citizens to develop a scientific temper, humanism and the spirit of inquiry and reform. So, point IV is correct. Providing Early Childhood care for children below 6 years of age is directed at the State under Article 45 (Directive Principles), not at citizens under Fundamental Duties. In Article 51A(k) the Constitution provides for the duty for providing education to one’s child/ward between the age of 6 to 14 years. So, point V is not correct. So, only two of the above given are included under the Fundamental Duties as enshrined in Part IVA of the Constitution"},{"id":88,"txt":"Consider the following statements with reference to the Government of India Act, 1909:\\n1. It abolished the provision of an official majority in the Central Legislative Council.\\n2. It provided for elections for the appointment to non-official members.\\n3. Members of the legislative councils were allowed to discuss the budget and ask supplementary questions related to it.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I and III only","I, II and III","I and II only","II and III only"],"ci":3,"exp":"Ex: The Government of India Act, 1909, also known as the Morley - Minto Reforms , was enacted by the British Parliament to introduce limited reforms in the legislative structure of British India. It marked the first attempt to incorporate Indians into the law - making process, albeit in a restricted manner. The Act significantly increased the size of both the Central and Provincial Legislative Councils. o For example, the Central Legislative Council was expanded from 16 to 60 members , while provincial councils such as those in Bengal, Bombay, Madras, and the United Provinces had up to 50 members. o Members of these councils were classified into four categories: ex - officio members (such as the Governor - General and his executive council), nominated official members (British Government officials), nominated non - official members (Indians not in Government service but appointed by the Governor - General), and elected members . While non - official members were in the majority in the provincial councils , many of them were still nominated, ensuring that elected members did not have real control. At the Central level , the official majority was retained , and real power continued to rest with the British. So, statement I is not correct. For the first time, the Act introduced the elective principle for Indian representation in the councils. The elections were indirect and limited to certain classes such as landlords, traders, universities, and chambers of commerce. So, statement II is correct. Indian members were given the right to discuss the budget, move resolutions, and ask supplementary questions , though their scope was limited. So, statement III is correct. Discussions on matters like foreign policy and relations with princely states were prohibited , and the British executive retained the power of veto over any legislation."},{"id":89,"txt":"Which of the following Parts of the Constitution of India were amended by the 97 th Constitutional Amendment Act, 2011 which provided for the Constitutional status to the cooperative societies?\\n1. Part IVA\\n2. Part III\\n3. Part IV\\n4. Part IXA\\nSelect the correct answer using the code given below:","ref":"","opts":["II and III only","I and II only","III and IV only","I, II, III and IV"],"ci":0,"exp":"Ex: The 97 Constitutional Amendment Act, 2011 was enacted to give Constitutional recognition to cooperative societies in India. Part IVA contains Fundamental Duties (Article 51A). The 97 Constitutional Amendment did not amend or insert any new fundamental duty . Therefore, no changes were made to this part in relation to cooperative societies. So, point I is not correct. It amended Part III by inserting a new provision under Article 19(1)(c) . Earlier, this article guaranteed all citizens the right to form associations and Unions. After the amendment, the right to form cooperative societies was also included under this article. This provided a fundamental right status to citizens to form coope rative societies So, point II is correct. The Amendment Act also amended Part IV by adding a new Directive Principle of State Policy under Article 43B. This new article directs the State to promote voluntary formation, autonomous functioning, democratic control, and professional management of cooperative societies. By placing this in the DPSP, the Constitution gave a policy direction to the State for the development of cooperative societies. Though not enforceable by Courts, this provision guides legislative and executive action. So, point III is c orrect. Part IXA of the Constitution relates to Municipalities (Articles 243P to 243ZG) . The 97th Amendment inserted an entirely new Part IXB (Articles 243ZH to 243ZT) for cooperative societies. So, point IV is not correct."},{"id":90,"txt":"Consider the following statements with regard to Review Petition in India:\\n1. An aggrieved person can approach the Court with a Review Petition as a matter of right.\\n2. The Court generally does not allow oral hearings or arguments by the lawyers for a Review Petition.\\n3. It is the final judicial remedy available to petitioner\\nHow many of the statements given above are correct?","ref":"","opts":["Only one","Only two","ll the three","None"],"ci":0,"exp":"Ex: A judgment of the Supreme Court becomes the law of the land, according to the Constitution. However, the Constitution itself gives, under Article 137, the Supreme Court the power to review any of its judgments or orders. Article 137 says that “Subject to the provisions of any law made by Parliament or any rules made under article 145, the Supreme Court shall have power to review any judgment pronounced or order made by it.” Under this, Review Petitions can be filed. The Supreme Court has been granted the discretionary powers to review its own judgments under Article 137 of the Constitution . Article 137 of the Constitution of India grants the Supreme Court the power to review any of its judgments or orders. When a review takes place, the law is that it is allowed not to take fresh stock of the case but to correct grave errors that have resul ted in the miscarriage of justice. A review petition is not a matter of right, but is a discretionary power of the Court. It is not necessary that only parties to a case can seek a review of the judgment on it. As per the Supreme Court Rules, any person aggrieved by a ruling can seek a review. However, the Court does not entertain every review petition filed. It exercises its discretion to allow a review petition only when it shows the grounds for seeking the review. So, statement I is not correct. As per rules framed by the Supreme Court, a review petition must be filed within 30 days of the date of judgment or order. While a judgment is the final decision in a case, an order is an interim ruling that is subject to its final verdict. In certain circ umstances, the Court can condone a delay in filing the review petition if the petitioner can establish strong reasons that justify the delay. When a review takes place, the law is that it is allowed not to take fresh stock of the case but to correct grave errors that have resulted in the miscarriage of justice. The power of review is distinct from the Court’s power to hear appeals, i.e. the appellate jurisdiction. When hearing a review petition filed against its own order or judgment, the Court does not rehear the case at hand, as it would in an appeal . The purpose of a review petition is limited to remedying an apparent error or the resultant grave injustice that has been the consequence of a decision of the Supreme Court. The rules state that review petitions would ordinarily be entertained without oral arguments by lawyers. It is heard “through circulation” by the judges in their chambers. Review petitions are also heard, as far as practicable, by the same combination of judges who delivered the order or judgment that is sought to be reviewed. If a judge has retired or is un available, a replacement is made keeping in mind the seniority of judges. So, statement II is correct. Only in exceptional cases, the Court allows an oral hearing. In a 2014 case, the Supreme Court held that review petitions in all death penalty cases will be heard in open Court by a Bench of three judges. Curative Petitions are the final remedy where the SC can reconsider a dismissed review petition. In 2002, in Rupa Hurra v Ashok Hurra, the SC allowed curative writs as the last resort to correct judgments. So, statement III is not correct. In Roopa Hurra v Ashok Hurra (2002), the Court itself evolved the concept of a curative petition, which can be heard after a review is dismissed to prevent abuse of its process. A curative petition is also entertained on very narrow grounds like a review p etition, and is generally not granted an oral hearing. So, only one of the above given statements is correct."},{"id":91,"txt":"Which one of the following languages not included in the Eighth Schedule of the Constitution of India?","ref":"","opts":["Manipuri","Konkani","English","odo G S T est – 02 – Polity ( V 7702)"],"ci":2,"exp":"Ex: Article 344 and Article 351 of the Constitution mentions the Eighth Schedule as a list of languages recognized by the Parliament. any inclusion or exclusion of languages from the Schedule requires a Constitutional Amendment under Article 368(1) of the Constitution. The Eighth Schedule of the Constitution currently recognizes 22 languages: (1) Assamese, (2) Bengali, (3) Gujarati, (4) Hindi, (5) Kannada, (6) Kashmiri, (7) Konkani , (8) Malayalam, (9) Manipuri, (10) Marathi, (11) Nepali, (12) Oriya, (13) Punjabi, (14) Sanskrit, (15) Sindhi, (16) Tamil, (17) Telugu, (18) Urdu (19) Bodo , (20) Santhali, (21) Maithili and (22) Dogri Though English is extensively used for official purposes, in Parliament, the judiciary, and various State administrations, it does not enjoy recognition as a scheduled language under the Eighth Schedule."},{"id":92,"txt":"With reference to the High Courts in India,\\nconsider the following statements:\\n1. The numerical strength of Judges in the High Courts is determined by the President.\\n2. The territorial jurisdiction of a High Court is co-terminus with the territory of the concerned State(s).\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":2,"exp":"Ex: Article 216 of the Constitution of India states that ‘Every High Court shall consist of a Chief Justice and such other Judges as the President may from time to time deem it necessary to appoint.’ Thus, the Constitution does not specify the strength of a High Court and leaves it to the discretion of the President. Thus, the President determines the strength of a High Court from time to time depending upon its workload. So, statement I is correct. The territorial jurisdiction of a High Court is co - terminus with the territory of a State. Similarly, the territorial jurisdiction of a common high Court is co - terminus with the territories of the concerned States and Union Territory. So, statement II is correct."},{"id":93,"txt":"Which one of the following Acts for the first time officially referred to the East India Company's territories in India as the British possessions?","ref":"","opts":["Regulating Act of 1773","Pitt's India Act of 1784","harter Act of 1813","Government of India Act of 1858"],"ci":1,"exp":"Ex: Over the course of colonial history of India, the British Parliament gradually asserted its control over the English East India Company and thereby its possessions in India, through various legislations. The Pitt’s India Act, 1784 (named after William Pitt, who was the British Prime Minister at that time) was a sequel to the Regulating Act of 1773, which introduced Parliamentary control over the administration of company’s Indian possessions for the first time. The Pitt’s India Act, 1784 made further inroads into the affairs of the company with the help of the Board of Control , which was to be established as a six membered body responsible to the Parliament. Through this Act the British Government was given Supreme control over the Company’s affairs and its administration in India . In this Act, it was for the first time that instead of referring to the Company’s Indian possession as ‘the Company’s properties’, it referred to Indian territories held by the Company as ‘British possessions in India’ . Thus, underscoring the ultimate sovereign control of the British crown over Indian possessions of the Company. Knowledge Box Pitt’s India Act, 1784: Establishment of a Board of Control : A six - member Board, including British cabinet ministers, was set up to supervise political, civil, and military affairs of the Company in India. Dual System of Control : Introduced a system where political matters were controlled by the British Government (Board of Control) and commercial activities remained with the East India Company (Court of Directors). It enhanced parliamentary oversight, effectively subordinating the East India Company to Crown governance. Reorganization of the Governor - General's Council : The number of council members was reduced from four to three, and the Governor - General was given the casting vote , strengthening his authority. Subordination of Bombay and Madras Presidencies : The Presidencies of Bombay and Madras were made subordinate to the Governor - General of Bengal in political and military matters. This helped in diminishing regional autonomy. Asset Disclosure by Officials : Company officials were required to declare their property in India and Britain to curb corruption."},{"id":94,"txt":"Consider the following situations:\\n1. The President of India issues a proclamation a for the revocation of emergency\\n2. One-tenth of the members of Lok Sabha submits a written notice to the President for the revocation of emergency\\n3. A resolution for the revocation is passed in each house of the Parliament by a simple majority\\n4. The Rajya Sabha rejects the proclamation of emergency at a time when the Lok Sabha stands dissolved is\\nIn how many of the above ways can the proclamation of national emergency be revoked?","ref":"","opts":["Only one","Only two","Only three","ll the four"],"ci":2,"exp":"Ex: Article 352 of the Constitution of India empowers the President to declare a national emergency on the grounds of war or external aggression or armed rebellion. The President can declare a national emergency even before the actual occurrence of war or external aggression or armed rebellion, if he is satisfied that there is an imminent danger. The President can proclaim a national emergency only after receiving a written recommendation from the Union Cabinet. A proclamation of national emergency may be applicable to the entire country or only a part of it. The proclamation of Emergency must be approved by both the Houses of Parliament within one month from the date of its issue. Every resolution approving the proclamation of emergency or its continuance must be passed by either House of Parliament by a speci al majority. If approved by both the Houses of Parliament, the emergency continues for six months. An approval is needed after every six months. Revocation of Emergency can occur under the following cases: Article 352 (2) says that a Proclamation of emergency may be varied or revoked by a subsequent Proclamation of the President . Thus, a proclamation of emergency may be revoked by the President at any time by a subsequent proclamation. Such a proclamation does not require parliamentary approval. So, point I is correct. Article 352 (7) says that the President shall revoke a Proclamation of Emergency if the House of the People (Lok Sabha) passes a resolution disapproving it by simple majority. Thus, when a resolution for the revocation is passed in each house of the Parliament by a simple majority, then also the President shall revoke a proclamation of Emergency. So, point III is correct. Article 352 (8) provides that when one - tenth of the total number of members of the Lok Sabha give a written notice to the Speaker (or to the President if the House is not in session), a special sitting of the House should be held within 14 days for the purpose of considering a resolution disapproving the continuation of the proclamation. Thus, the emergency does not directly stand revoked on the submission of written notice to the President, but only a special sitting of the Lok Sabha is to be held within 1 4 days for the purpose of considering a resolution for revocation. So, point II is not correct. The proclamation of Emergency must be approved by both the Houses of Parliament within one month from the date of its issue. But, if the proclamation of emergency is issued at a time when the Lok Sabha stands dissolved, then the proclamation survives until 30 days from the first sitting of the Lok Sabha after its reConstitution, provided the Rajya Sabha has in the meantime approved it. Thus, if the Rajya Sabha does not approve the Proclamation of Emergency when the Lok Sabha stands dissolved, the Emergency would get revoked after a period of one month from the date of its issue. So, point IV is correct. So, in only three of the above situations the national emergency will be revoked."},{"id":95,"txt":"Which of the following statements best describes the similarity between the Constitution of India and that in the British Constitution?\\n1. Both recognize the ‘Equality before Law’ as a foundational corollary of the Right to Equality.\\n2. The judicial pronouncements are the primary source of rights in both the British and the Indian Constitution.\\nSelect the correct answer using the code given below:","ref":"","opts":["I only","II only","oth I and II","Neither I nor II"],"ci":0,"exp":"Ex: Article 14 of the Constitution of India says that “The State shall not deny to any person equality before the law or the equal protection of the laws within the territory of India.” In Indian context, this Article has two components: Equality before the Law: It indicates that all are to be treated equally in the eyes of the law. This is a negative concept as it implies the absence of any privilege in favor of any person. Equal protection of the Laws : This means that the same law will be applied to all the people equally across the society. This is a positive concept as it expects a positive action from the State. ‘Equality before law’ implies the dearth of special exemption in favour of any persons, the equal domination of all persons to the common law of the land operated by common laws, and no person is above the law of the nation. This notion in the Constitution of India is largely i nspired from the British Constitution, where it became the foundational principle of the magna carta issued in June 1215 and was the first document to put into writing the principle that the king and his Government was not above the law. So, statement I is correct. Under the Constitution of India, the Constitution is the primary source of the individual rights. The Constitution of India grants all citizens Fundamental Rights and empowers the independent judiciary to invalidate legislations or Government actions which violate these rights. So, statement II is not correct. The British Constitution is unwritten and largely based on conventions, statutes, and judicial decisions. Hence, judicial pronouncements do play a significant role in shaping rights."},{"id":96,"txt":"With reference to the Public Interest Litigations (PILs) in India, consider the following statements:\\n1. The requirement of “ Locus Standi ” has been relaxed for the filing of PILs in India.\\n2. The Supreme Court of India cannot initiate a PIL on a suo moto basis.\\n3. They cannot be filed in any Court lower than the High Courts in India.\\nWhich of the statements given above is/are correct?","ref":"","opts":["I only","II and III only","I and III only","I, II and III"],"ci":2,"exp":"Ex: A Public Interest Litigation or PIL is a form of litigation that is filed in a Court to safeguard or enforce public interest. In India, the PIL was introduced in the 1980s as a product of the judicial activism of the Supreme Court of India. PIL has not been defined in any Indian statute or the Constitution. However, the Supreme Court of India has held that the expression 'PIL' means a legal action started in a Court of law for the enforcement of public/general interest where the public or a particular class of the public has some interest (including pecuniary interest) that affects their legal rights or liabilities.’ As doctrined and reiterated by the Supreme Court, the requirement of locus standi , that only the aggrieved party or the party having specific interest to the dispute can appear or appeal in the Court of law , doesn’t fully apply in cases of PILs, any person, whether party to the dispute or not can file a PIL in Indian Courts, the only precondition being that it must prove to the satisfaction of the Court that the petition is being filed for public interest. So, statement I is correct. As under the Supreme Court rules (which are also applicable to the High Courts) under Order 38 Rule 12(1)(a) a suo motu cognizance taken by the Court is to be taken as a PIL . So, statement II is not correct. PILs are extensions of Writ Jurisdiction. Therefore, PILs may be filed either before the Hon’ble Supreme Court of India under Article 32 of the Indian Constitution or any High Court under Article 226 of the Indian Constitution. Thus, PILs can be filed only in the Supreme Court of India or the State High Courts. So, statement III is correct."},{"id":97,"txt":"Consider the following statements:\\n1. The judges of High Courts are administered their oath of office, by the President.\\n2. The salaries and pensions of the High Court Judges are charged on the Consolidated Fund\\nof the States.\\n3. A Judge can be transferred from one High Court to another only after consulting the Governors of both the concerned States.\\nHow many of the statements given above are correct?","ref":"","opts":["Only one","Only two","ll the three","None G S T est – 02 – Polity ( V 7702)"],"ci":3,"exp":"Ex: A person appointed as a judge of a High Court has to make and subscribe an oath or affirmation by the Governor of the State before entering upon his office. Article 219 of the Constitution says that “Every person appointed to be a Judge of a High Court shall, before he enters upon his office, make and subscribe before the Governor of the State , or some person appointed in that behalf by him, an oath or affirmation according to the form set out for the purpose in the Third Schedule.” So, statement I is not correct. The salaries of the Judges of each High Court is determined by the Parliament. The salaries and allowances of the judges are charged on the Consolidated Fund of the State . But, the pension of a High Court judge is charged on the Consolidated Fund of India and not the State. So, statement II is not correct. The President can transfer a judge from one high Court to another after consulting the Chief Justice of India. In the Third Judges case (1998), the Supreme Court opined that in case of the transfer of high Court judges, the Chief Justice of India should consult, in addition to the collegium of four senior most judges of the Supreme Court, the chief justice of the two high Courts concerned. So, statement III is not correct. So, none of the above given statements are correct."},{"id":98,"txt":"Consider the following Constitutional principles:\\n1. Socialist\\n2. Secular\\n3. Democratic\\n4. Fraternity\\n5. Integrity\\nHow many of the above terms were not a part of the Preamble to the original Constitution?","ref":"","opts":["Only two","Only three","Only four","ll the five"],"ci":1,"exp":"Ex: The Preamble to the Constitution of India acts as a summary of the guiding principles and core values upon which the Constitution is based. It declares India to be a Sovereign, Socialist, Secular, Democratic Republic and sets out objectives such as Justice , Liberty, Equality, and Fraternity Socialist: This term was added to the Preamble by the 42nd Amendment Act, 1976. So, point I is correct. Secular: The term Secular was added by the 42nd Constitutional Amendment in 1976 to affirm that the State will treat all religions equally and not favour or discriminate against any religion. So, point II is correct. Democratic: it reflects the political system of India, where the Government is elected by the people and is accountable to them. It was part of the Preamble as was promulgated on 26th January 1950. So, point III is not correct. Fraternity: It is a value that promotes a sense of brotherhood and unity among citizens. This term was present in the Preamble as was promulgated on 26th January 1950. So, point IV is not correct. Integrity: This term was added via the 42 Constitutional Amendment Act, 1976, its inclusion underscored that fraternity amongst Indians shall not be limited to caste, class, religion, region, language, sex etc. but shall assimilate all to ensure that the unity and integrity of India is maintained. So, point V is correct. So, only three of the above terms were not a part of the Preamble to the original Constitution."},{"id":99,"txt":"Which of the following statements is/are correct in reference to the Proclamation of Financial Emergency in India?\\n1. Such a proclamation needs to be approved by the Parliament within two months of its issue.\\n2. Such an Emergency, once approved, continues indefinitely without needing any repeated Parliamentary approval.\\n3. The Courts are not allowed to review the grounds of the imposition of such an Emergency.\\nSelect the correct answer using the code given below:","ref":"","opts":["I only","I and II only","II and III only","I, II and III"],"ci":1,"exp":"Ex: Article 360 of the Constitution of India empowers the President to proclaim a Financial Emergency if the financial stability or credit of India or any part of its territory is threatened. A proclamation declaring financial emergency must be approved by both the Houses of Parliament within two months from the date of its issue. A resolution approving the proclamation of financial emergency can be passed by either House of Parliament only by a simple majority. So, statement I is correct. Once approved by both the Houses of Parliament, the Financial Emergency continues indefinitely till it is revoked . Thus, there is no maximum period prescribed for its operation and repeated parliamentary approval is not required for its continuation. So, statement II is correct. The Proclamation of Financial Emergency may be revoked by a subsequent Proclamation of the President. The 38th Amendment Act of 1975 made the satisfaction of the President in declaring a Financial Emergency final and conclusive and not questionable in any Court on any ground. But, this provision was subsequently deleted by the 44th Amendment Act of 1978 implying that the satisfaction of the President is not beyond judicial review. So, statement III is not correct."}],"m":null,"tt":3000,"nm":0.66};
-st={cq:0,a:Array(qd.q.length).fill(null),mk:Array(qd.q.length).fill(false),tr:qd.tt,ti:null,sb:false,rv:false,th:'light'};
-
-const VoiceEngine = {
-    enabledQ: false,
-    enabledExp: false,
-    selectedVoice: null,
-    init() {
-        const qCheck = document.getElementById('tts-read-q-p');
-        const expCheck = document.getElementById('tts-read-exp-p');
-        if (qCheck) {
-            this.enabledQ = localStorage.getItem('tts_read_q') === 'true';
-            qCheck.checked = this.enabledQ;
-            qCheck.addEventListener('change', (e) => {
-                this.enabledQ = e.target.checked;
-                localStorage.setItem('tts_read_q', this.enabledQ);
-                if (this.enabledQ) this.speak("Voice enabled");
-                else window.speechSynthesis.cancel();
-            });
-        }
-        if (expCheck) {
-            this.enabledExp = localStorage.getItem('tts_read_exp') === 'true';
-            expCheck.checked = this.enabledExp;
-            expCheck.addEventListener('change', (e) => {
-                this.enabledExp = e.target.checked;
-                localStorage.setItem('tts_read_exp', this.enabledExp);
-                if (this.enabledExp) this.speak("Explanation enabled");
-                else window.speechSynthesis.cancel();
-            });
-        }
-        this.selectVoice();
-        if (typeof window !== 'undefined' && window.speechSynthesis) {
-            window.speechSynthesis.onvoiceschanged = () => this.selectVoice();
-        }
-    },
-    selectVoice() {
-        if (typeof window === 'undefined' || !window.speechSynthesis) return;
-        const voices = window.speechSynthesis.getVoices();
-        let hiVoice = voices.find(v => v.lang.startsWith('hi') && (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('veena') || v.name.toLowerCase().includes('google')));
-        if (!hiVoice) hiVoice = voices.find(v => v.lang.startsWith('hi'));
-        let enVoice = voices.find(v => v.lang.startsWith('en') && (v.name.toLowerCase().includes('zira') || v.name.toLowerCase().includes('hazel') || v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('samantha')));
-        if (!enVoice) enVoice = voices.find(v => v.lang.startsWith('en'));
-        this.selectedVoice = hiVoice || enVoice || voices[0];
-    },
-    speak(text) {
-        if (typeof window === 'undefined' || !window.speechSynthesis) return;
-        window.speechSynthesis.cancel();
-        if (!text) return;
-        let cleanText = text.replace(/<[^>]*>/g, "").trim();
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        if (this.selectedVoice) utterance.voice = this.selectedVoice;
-        window.speechSynthesis.speak(utterance);
-    },
-    speakQuestion(qObj) {
-        if (!this.enabledQ) return;
-        let str = qObj.txt + ". ";
-        if (qObj.opts) {
-            qObj.opts.forEach((o, i) => {
-                str += "Option " + String.fromCharCode(65 + i) + ": " + o + ". ";
-            });
-        }
-        this.speak(str);
-    },
-    speakExplanation(exp) {
-        if (!this.enabledExp) return;
-        this.speak("Explanation: " + exp);
-    }
-};
-
-const Lifelines = {
-    used5050: false,
-    usedPoll: false,
-    usedDouble: false,
-    doubleDipActive: false,
-    init() {
-        this.used5050 = false;
-        this.usedPoll = false;
-        this.usedDouble = false;
-        this.doubleDipActive = false;
-        const btn1 = document.getElementById('ll-5050');
-        const btn2 = document.getElementById('ll-poll');
-        const btn3 = document.getElementById('ll-double');
-        if (btn1) btn1.disabled = false;
-        if (btn2) btn2.disabled = false;
-        if (btn3) btn3.disabled = false;
-    }
-};
-
-function useLifeline(type) {
-    const q = qd.q[st.cq];
-    if (type === '5050') {
-        if (Lifelines.used5050) return;
-        Lifelines.used5050 = true;
-        document.getElementById('ll-5050').disabled = true;
-        
-        const incorrect = [];
-        q.opts.forEach((_, i) => {
-            if (i !== q.ci) incorrect.push(i);
-        });
-        
-        const toHide = [];
-        while (toHide.length < 2 && incorrect.length > 0) {
-            toHide.push(incorrect.splice(Math.floor(Math.random() * incorrect.length), 1)[0]);
-        }
-        
-        const btns = document.querySelectorAll('.option-btn');
-        toHide.forEach(idx => {
-            if (btns[idx]) {
-                btns[idx].style.opacity = '0';
-                btns[idx].style.pointerEvents = 'none';
-            }
-        });
-    } 
-    else if (type === 'poll') {
-        if (Lifelines.usedPoll) return;
-        Lifelines.usedPoll = true;
-        document.getElementById('ll-poll').disabled = true;
-        
-        let correctPct = Math.floor(Math.random() * 25) + 50;
-        let remaining = 100 - correctPct;
-        
-        const optPcts = [0, 0, 0, 0];
-        optPcts[q.ci] = correctPct;
-        
-        const other = [0, 1, 2, 3].filter(i => i !== q.ci);
-        const p1 = Math.floor(Math.random() * (remaining - 5));
-        remaining -= p1;
-        const p2 = Math.floor(Math.random() * remaining);
-        const p3 = remaining - p2;
-        optPcts[other[0]] = p1;
-        optPcts[other[1]] = p2;
-        optPcts[other[2]] = p3;
-        
-        const container = document.getElementById('pollBarsContainer');
-        container.innerHTML = '';
-        
-        q.opts.forEach((opt, idx) => {
-            const pct = optPcts[idx];
-            const label = String.fromCharCode(65 + idx);
-            const barWrap = document.createElement('div');
-            barWrap.style.marginBottom = '10px';
-            barWrap.innerHTML = `
-                <div style="display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:4px;">
-                    <span>Option ${label}: ${opt.slice(0, 25)}</span>
-                    <span>${pct}%</span>
-                </div>
-                <div style="height:10px; background:rgba(0,0,0,0.05); border-radius:5px; overflow:hidden;">
-                    <div class="poll-fill-${idx}" style="height:100%; border-radius:5px; width:0%; background:${idx === q.ci ? 'var(--success)' : 'var(--primary)'}; transition: width 1s ease;"></div>
-                </div>
-            `;
-            container.appendChild(barWrap);
-            setTimeout(() => {
-                const fillEl = container.querySelector('.poll-fill-' + idx);
-                if (fillEl) fillEl.style.width = pct + '%';
-            }, 100);
-        });
-        
-        document.getElementById('pollModal').style.display = 'flex';
-    } 
-    else if (type === 'double') {
-        if (Lifelines.usedDouble) return;
-        Lifelines.usedDouble = true;
-        Lifelines.doubleDipActive = true;
-        document.getElementById('ll-double').disabled = true;
-        alert("Double Dip Lifeline Active! You can now guess twice for this question.");
-    }
-}
-
-document.addEventListener('DOMContentLoaded',()=>{sms();pcc();lt()});
-function lt(){const t=localStorage.getItem('qt')||'light';st.th=t;document.documentElement.setAttribute('data-theme',t);uti()}
-function tgt(){st.th=st.th==='light'?'dark':'light';document.documentElement.setAttribute('data-theme',st.th);localStorage.setItem('qt',st.th);uti()}
-function uti(){const i=document.querySelector('#tt i');if(i)i.className=st.th==='light'?'fas fa-moon':'fas fa-sun'}
-function pcc(){document.addEventListener('contextmenu',e=>e.preventDefault());document.addEventListener('copy',e=>e.preventDefault());document.addEventListener('cut',e=>e.preventDefault());document.addEventListener('selectstart',e=>{if(!e.target.tagName.match(/INPUT|TEXTAREA/i))e.preventDefault()})}
-function sms(){const mc=document.querySelectorAll('.mode-card'),sb=document.getElementById('sb');mc.forEach(c=>{c.addEventListener('click',()=>{mc.forEach(x=>x.classList.remove('selected'));c.classList.add('selected');qd.m=c.dataset.mode;sb.disabled=false})});sb.addEventListener('click',sq)}
-function sq(){const ct=document.getElementById('ct'),ctv=parseInt(ct.value);if(ctv&&ctv>0){st.tr=ctv*60;qd.tt=ctv*60}document.body.style.overflow='hidden';document.getElementById('modeSelection').style.display='none';document.getElementById('quizContainer').style.display='block';document.getElementById('mb').textContent=qd.m;document.getElementById('mb').className='mode-badge '+qd.m;iq()}
-function iq(){Lifelines.init();VoiceEngine.init();rq(0);rqg();stt();sn()}
-function stt(){utd();st.ti=setInterval(()=>{st.tr--;utd();if(st.tr<=0){clearInterval(st.ti);sbq()}if(st.tr<=60)document.getElementById('td').classList.add('warning')},1000)}
-function utd(){const m=Math.floor(st.tr/60),s=st.tr%60;document.getElementById('tt2').textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
-function rq(i){st.cq=i;const q=qd.q[i],qs=document.getElementById('qs');let h=`<div class="question-card"><div class="question-number"><i class="fas fa-question-circle"></i>Question ${i+1} of ${qd.q.length}</div>`;if(q.ref)h+=`<div class="question-reference protected-content"><i class="fas fa-info-circle"></i> ${q.ref}</div>`;h+=`<div class="question-text protected-content">${q.txt}</div><div class="options-container">`;q.opts.forEach((o,x)=>{let bc='option-btn',ic=String.fromCharCode(65+x);const isSel=st.a[i]===x,isCor=x===q.ci,shAns=(qd.m==='practice'&&st.a[i]!==null)||st.sb;if(isSel)bc+=' selected';if(shAns){bc+=' disabled';if(isCor){bc+=' correct';ic='<i class="fas fa-check"></i>'}else if(isSel&&!isCor){bc+=' incorrect';ic='<i class="fas fa-times"></i>'}}h+=`<button class="${bc}" data-index="${x}" onclick="so(${x})"><div class="option-indicator">${ic}</div><div class="option-text protected-content">${o}</div></button>`});h+=`</div>`;const shExp=(qd.m==='practice'&&st.a[i]!==null)||st.sb;if(shExp)h+=`<div class="explanation-box" style="display:block"><div class="explanation-header"><i class="fas fa-lightbulb"></i>Explanation</div><div class="explanation-text protected-content">${q.exp}</div></div>`;h+=`</div>`;qs.innerHTML=h;qs.scrollTop=0;up();unb();uqg();if(!st.sb && VoiceEngine.enabledQ){VoiceEngine.speakQuestion(q);}}
-function so(oi){if(st.sb)return;const q=qd.q[st.cq];if(Lifelines.doubleDipActive){if(oi!==q.ci){Lifelines.doubleDipActive=false;const btn=document.querySelector('.option-btn[data-index="'+oi+'"]');if(btn){btn.classList.add('incorrect');btn.style.pointerEvents='none';btn.querySelector('.option-indicator').innerHTML='<i class="fas fa-times"></i>';}return;}else{Lifelines.doubleDipActive=false;}}if(st.a[st.cq]===oi){st.a[st.cq]=null}else{st.a[st.cq]=oi}rq(st.cq);if(qd.m==='practice' && st.a[st.cq]!==null && VoiceEngine.enabledExp){VoiceEngine.speakExplanation(q.exp);}}
-function sn(){document.getElementById('pv').addEventListener('click',np);document.getElementById('nx').addEventListener('click',nn);document.getElementById('mk').addEventListener('click',tm);document.getElementById('sm').addEventListener('click',cs);document.getElementById('nt').addEventListener('click',tnp);document.getElementById('nc').addEventListener('click',tnp);document.getElementById('rb').addEventListener('click',ra);document.getElementById('rsb').addEventListener('click',rs);document.getElementById('tt').addEventListener('click',tgt);document.addEventListener('keydown',e=>{if(st.sb)return;if(e.key==='ArrowLeft')np();if(e.key==='ArrowRight')nn()})}
-function np(){if(st.cq>0)rq(st.cq-1)}
-function nn(){if(st.cq<qd.q.length-1)rq(st.cq+1)}
-function tm(){st.mk[st.cq]=!st.mk[st.cq];uqg();const mb=document.getElementById('mk');mb.innerHTML=st.mk[st.cq]?'<i class="fas fa-bookmark"></i> Unmark':'<i class="fas fa-bookmark"></i> Mark'}
-function unb(){document.getElementById('pv').disabled=st.cq===0;if(st.cq===qd.q.length-1){document.getElementById('nx').style.display='none';document.getElementById('sm').style.display='flex'}else{document.getElementById('nx').style.display='flex';document.getElementById('sm').style.display='none'}const mb=document.getElementById('mk');mb.innerHTML=st.mk[st.cq]?'<i class="fas fa-bookmark"></i> Unmark':'<i class="fas fa-bookmark"></i> Mark'}
-function up(){const at=st.a.filter(a=>a!==null).length,pr=((st.cq+1)/qd.q.length)*100;document.getElementById('pt').textContent=`Question ${st.cq+1} of ${qd.q.length}`;document.getElementById('at').textContent=`Attempted: ${at}/${qd.q.length}`;document.getElementById('pb').style.width=pr+'%'}
-function rqg(){const g=document.getElementById('qg');g.innerHTML='';qd.q.forEach((_,i)=>{const it=document.createElement('div');it.className='question-nav-item';it.textContent=i+1;it.onclick=()=>{rq(i);if(window.innerWidth<768)tnp()};g.appendChild(it)})}
-function uqg() {
+const qd={{q:[{questions_js}],m:null,tt:{total_time},nm:{negative_marks}}},
+st={{cq:0,a:Array(qd.q.length).fill(null),mk:Array(qd.q.length).fill(false),tr:qd.tt,ti:null,sb:false,rv:false,th:'light'}};
+if(window.marked){{marked.setOptions({{gfm:true,breaks:true}})}}
+function renderContent(text,inline){{
+    if(text===undefined||text===null||text==='')return '';
+    let t=String(text);
+    const store=[];
+    const stash=(expr,display)=>{{store.push({{expr:expr.trim(),display}});return '@@MATHPH'+(store.length-1)+'@@'}};
+    t=t.replace(/\\$\\$([\\s\\S]+?)\\$\\$/g,(m,e,off,str)=>{{
+        const bLine=str.slice(0,off).split('\\n').pop();
+        const aLine=str.slice(off+m.length).split('\\n')[0];
+        const isBlock=e.indexOf('\\n')>=0||(/^\\s*$/.test(bLine)&&/^\\s*$/.test(aLine));
+        return stash(e,isBlock);
+    }});
+    t=t.replace(/(?<!\\\\)\\$(?!\\s|\\$)([^$\\n]+?)(?<!\\s)\\$(?!\\d)/g,(m,e)=>stash(e,false));
+    t=t.replace(/(?<!=)==(?!=|\\s)([^=\\n]+?)(?<!\\s)==(?!=)/g,(m,e)=>'<mark>'+e+'</mark>');
+    let html;
+    try{{
+        html=inline?marked.parseInline(t):marked.parse(t);
+    }}catch(e){{
+        html=t.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }}
+    html=html.replace(/@@MATHPH(\\d+)@@/g,(m,idx)=>{{
+        const item=store[parseInt(idx)];
+        if(!item)return m;
+        try{{
+            return katex.renderToString(item.expr,{{displayMode:item.display,throwOnError:false,strict:false}});
+        }}catch(e){{
+            return item.display?('$$'+item.expr+'$$'):('$'+item.expr+'$');
+        }}
+    }});
+    return html;
+}}
+document.addEventListener('DOMContentLoaded',()=>{{sms();pcc();lt()}});
+function lt(){{const t=localStorage.getItem('qt')||'light';st.th=t;document.documentElement.setAttribute('data-theme',t);uti()}}
+function tgt(){{st.th=st.th==='light'?'dark':'light';document.documentElement.setAttribute('data-theme',st.th);localStorage.setItem('qt',st.th);uti()}}
+function uti(){{const i=document.querySelector('#tt i');if(i)i.className=st.th==='light'?'fas fa-moon':'fas fa-sun'}}
+function pcc(){{document.addEventListener('contextmenu',e=>e.preventDefault());document.addEventListener('copy',e=>e.preventDefault());document.addEventListener('cut',e=>e.preventDefault());document.addEventListener('selectstart',e=>{{if(!e.target.tagName.match(/INPUT|TEXTAREA/i))e.preventDefault()}})}}
+function sms(){{const mc=document.querySelectorAll('.mode-card'),sb=document.getElementById('sb');mc.forEach(c=>{{c.addEventListener('click',()=>{{mc.forEach(x=>x.classList.remove('selected'));c.classList.add('selected');qd.m=c.dataset.mode;sb.disabled=false}})}});sb.addEventListener('click',sq)}}
+function sq(){{const ct=document.getElementById('ct'),ctv=parseInt(ct.value);if(ctv&&ctv>0){{st.tr=ctv*60;qd.tt=ctv*60}}document.body.style.overflow='hidden';document.getElementById('modeSelection').style.display='none';document.getElementById('quizContainer').style.display='block';document.getElementById('mb').textContent=qd.m;document.getElementById('mb').className='mode-badge '+qd.m;iq()}}
+function iq(){{rq(0);rqg();stt();sn()}}
+function stt(){{utd();st.ti=setInterval(()=>{{st.tr--;utd();if(st.tr<=0){{clearInterval(st.ti);sbq()}}if(st.tr<=60)document.getElementById('td').classList.add('warning')}},1000)}}
+function utd(){{const m=Math.floor(st.tr/60),s=st.tr%60;document.getElementById('tt2').textContent=`${{String(m).padStart(2,'0')}}:${{String(s).padStart(2,'0')}}`}}
+function rq(i){{st.cq=i;const q=qd.q[i],qs=document.getElementById('qs');let h=`<div class="question-card"><div class="question-number"><i class="fas fa-question-circle"></i>Question ${{i+1}} of ${{qd.q.length}}</div>`;if(q.ref)h+=`<div class="question-reference protected-content"><i class="fas fa-info-circle"></i> ${{renderContent(q.ref,true)}}</div>`;h+=`<div class="question-text protected-content">${{renderContent(q.txt)}}</div><div class="options-container">`;q.opts.forEach((o,x)=>{{let bc='option-btn',ic=String.fromCharCode(65+x);const isSel=st.a[i]===x,isCor=x===q.ci,shAns=(qd.m==='practice'&&st.a[i]!==null)||st.sb;if(isSel)bc+=' selected';if(shAns){{bc+=' disabled';if(isCor){{bc+=' correct';ic='<i class="fas fa-check"></i>'}}else if(isSel&&!isCor){{bc+=' incorrect';ic='<i class="fas fa-times"></i>'}}}}h+=`<button class="${{bc}}" data-index="${{x}}" onclick="so(${{x}})"><div class="option-indicator">${{ic}}</div><div class="option-text protected-content">${{renderContent(o,true)}}</div></button>`}});h+=`</div>`;const shExp=(qd.m==='practice'&&st.a[i]!==null)||st.sb;if(shExp)h+=`<div class="explanation-box" style="display:block"><div class="explanation-header"><i class="fas fa-lightbulb"></i>Explanation</div><div class="explanation-text protected-content">${{renderContent(q.exp)}}</div></div>`;h+=`</div>`;qs.innerHTML=h;qs.scrollTop=0;up();unb();uqg()}}
+function so(oi){{if(st.sb)return;if(st.a[st.cq]===oi){{st.a[st.cq]=null}}else{{st.a[st.cq]=oi}}rq(st.cq)}}
+function sn(){{document.getElementById('pv').addEventListener('click',np);document.getElementById('nx').addEventListener('click',nn);document.getElementById('mk').addEventListener('click',tm);document.getElementById('sm').addEventListener('click',cs);document.getElementById('nt').addEventListener('click',tnp);document.getElementById('nc').addEventListener('click',tnp);document.getElementById('rb').addEventListener('click',ra);document.getElementById('rsb').addEventListener('click',rs);document.getElementById('tt').addEventListener('click',tgt);document.addEventListener('keydown',e=>{{if(st.sb)return;if(e.key==='ArrowLeft')np();if(e.key==='ArrowRight')nn()}})}}
+function np(){{if(st.cq>0)rq(st.cq-1)}}
+function nn(){{if(st.cq<qd.q.length-1)rq(st.cq+1)}}
+function tm(){{st.mk[st.cq]=!st.mk[st.cq];uqg();const mb=document.getElementById('mk');mb.innerHTML=st.mk[st.cq]?'<i class="fas fa-bookmark"></i> Unmark':'<i class="fas fa-bookmark"></i> Mark'}}
+function unb(){{document.getElementById('pv').disabled=st.cq===0;if(st.cq===qd.q.length-1){{document.getElementById('nx').style.display='none';document.getElementById('sm').style.display='flex'}}else{{document.getElementById('nx').style.display='flex';document.getElementById('sm').style.display='none'}}const mb=document.getElementById('mk');mb.innerHTML=st.mk[st.cq]?'<i class="fas fa-bookmark"></i> Unmark':'<i class="fas fa-bookmark"></i> Mark'}}
+function up(){{const at=st.a.filter(a=>a!==null).length,pr=((st.cq+1)/qd.q.length)*100;document.getElementById('pt').textContent=`Question ${{st.cq+1}} of ${{qd.q.length}}`;document.getElementById('at').textContent=`Attempted: ${{at}}/${{qd.q.length}}`;document.getElementById('pb').style.width=pr+'%'}}
+function rqg(){{const g=document.getElementById('qg');g.innerHTML='';qd.q.forEach((_,i)=>{{const it=document.createElement('div');it.className='question-nav-item';it.textContent=i+1;it.onclick=()=>{{rq(i);if(window.innerWidth<768)tnp()}};g.appendChild(it)}})}}
+function uqg() {{
     const its = document.querySelectorAll('.question-nav-item');
-    its.forEach((it, i) => {
+    its.forEach((it, i) => {{
         it.className = 'question-nav-item';
         if (i === st.cq) it.classList.add('current');
-        if (st.sb) {
+        if (st.sb) {{
             if (st.a[i] === qd.q[i].ci) it.classList.add('correct');
             else if (st.a[i] !== null) it.classList.add('incorrect');
-        } else {
+        }} else {{
             if (st.a[i] !== null) it.classList.add('answered');
             if (st.mk[i]) it.classList.add('marked');
-        }
-    });
-}
-function tnp(){document.getElementById('np').classList.toggle('open')}
-function cs(){const u=st.a.filter(a=>a===null).length;if(u>0){const c=window.confirm(`You have ${u} unattempted question(s). Do you want to submit?`);if(!c)return}sbq()}
-function sbq(){clearInterval(st.ti);st.sb=true;let c=0,ic=0,u=0,nm=0;st.a.forEach((a,i)=>{if(a===null)u++;else if(a===qd.q[i].ci)c++;else{ic++;nm+=qd.nm}});const ts=c-nm,pc=(ts/qd.q.length)*100;document.body.style.overflow='auto';document.getElementById('quizContainer').style.display='none';document.getElementById('resultsContainer').style.display='block';document.getElementById('resultsContainer').classList.add('scrollable');if(pc>=70){document.getElementById('ri').innerHTML='<i class="fas fa-trophy" style="color:#fbbf24"></i>';document.getElementById('rt').textContent='Excellent Performance!'}else if(pc>=50){document.getElementById('ri').innerHTML='<i class="far fa-smile" style="color:#48bb78"></i>';document.getElementById('rt').textContent='Good Job!'}else{document.getElementById('ri').innerHTML='<i class="far fa-meh" style="color:#f5576c"></i>';document.getElementById('rt').textContent='Keep Practicing!'}document.getElementById('rs').textContent=ts.toFixed(2)+' / '+qd.q.length;document.getElementById('rp').textContent=pc.toFixed(1)+'%';document.getElementById('cc').textContent=c;document.getElementById('ic').textContent=ic;document.getElementById('uc').textContent=u;document.getElementById('nm').textContent='-'+nm.toFixed(2)}
-function ra(){st.rv=true;document.body.style.overflow='hidden';document.getElementById('resultsContainer').style.display='none';document.getElementById('quizContainer').style.display='block';rq(0);uqg()}
-function rs(){document.body.style.overflow='hidden';location.reload()}
+        }}
+    }});
+}}
+function tnp(){{document.getElementById('np').classList.toggle('open')}}
+function cs(){{const u=st.a.filter(a=>a===null).length;if(u>0){{const c=window.confirm(`You have ${{u}} unattempted question(s). Do you want to submit?`);if(!c)return}}sbq()}}
+function sbq(){{clearInterval(st.ti);st.sb=true;let c=0,ic=0,u=0,nm=0;st.a.forEach((a,i)=>{{if(a===null)u++;else if(a===qd.q[i].ci)c++;else{{ic++;nm+=qd.nm}}}});const ts=c-nm,pc=(ts/qd.q.length)*100;document.body.style.overflow='auto';document.getElementById('quizContainer').style.display='none';document.getElementById('resultsContainer').style.display='block';document.getElementById('resultsContainer').classList.add('scrollable');if(pc>=70){{document.getElementById('ri').innerHTML='<i class="fas fa-trophy" style="color:#fbbf24"></i>';document.getElementById('rt').textContent='Excellent Performance!'}}else if(pc>=50){{document.getElementById('ri').innerHTML='<i class="far fa-smile" style="color:#48bb78"></i>';document.getElementById('rt').textContent='Good Job!'}}else{{document.getElementById('ri').innerHTML='<i class="far fa-meh" style="color:#f5576c"></i>';document.getElementById('rt').textContent='Keep Practicing!'}}document.getElementById('rs').textContent=ts.toFixed(2)+' / '+qd.q.length;document.getElementById('rp').textContent=pc.toFixed(1)+'%';document.getElementById('cc').textContent=c;document.getElementById('ic').textContent=ic;document.getElementById('uc').textContent=u;document.getElementById('nm').textContent='-'+nm.toFixed(2)}}
+function ra(){{st.rv=true;document.body.style.overflow='hidden';document.getElementById('resultsContainer').style.display='none';document.getElementById('quizContainer').style.display='block';rq(0);uqg()}}
+function rs(){{document.body.style.overflow='hidden';location.reload()}}
 </script>
 </body>
 </html>"""
 
-def generate_quiz_report_html(quiz: dict, attempts: list[dict] | None = None) -> tuple[bytes, str]:
-    quiz_name = quiz.get("quiz_name", "Quiz")
-    qid = quiz.get("qid", "quiz")
-    timer = int(quiz.get("timer", 60))
-    raw_questions = quiz.get("questions", [])
+    return html_doc.encode("utf-8"), filename
 
-    q_list = []
-    for i, q in enumerate(raw_questions):
-        txt = q.get("question", f"Question {i+1}")
-        ref = q.get("reference") or q.get("reply_text") or ""
-        opts = q.get("options") or []
-        ci = int(q.get("correct_option_id", 0))
-        exp = q.get("explanation") or ""
-        q_list.append({
-            "id": i,
-            "txt": txt,
-            "ref": ref,
-            "opts": opts,
-            "ci": ci,
-            "exp": exp
-        })
 
-    qd_data = {
-        "tt": timer * 60 if timer < 100 else timer,
-        "q": q_list
+# --------------------------------------------------------------------------
+# render_analysis_html: leaderboard / analysis report page
+# --------------------------------------------------------------------------
+
+_ANALYSIS_CSS = """
+.hero {
+  padding: 34px clamp(16px, 5vw, 40px);
+  margin: 20px 0;
+  text-align: center;
+}
+.hero h1 { font-size: clamp(1.4rem, 4vw, 1.9rem); margin: 0 0 6px; font-weight: 800; }
+.hero p { color: var(--color-text-muted); margin: 0; }
+
+.section { margin: 28px 0; }
+.section-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title i { color: var(--color-primary); }
+
+.podium {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  align-items: end;
+}
+.podium-slot {
+  padding: 20px 14px 18px;
+  text-align: center;
+  border-radius: var(--radius-md);
+  position: relative;
+}
+.podium-slot .rank-badge {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 10px;
+  font-weight: 800;
+  color: #fff;
+  font-size: 1.1rem;
+}
+.podium-1 { order: 2; background: linear-gradient(180deg, #fff7e0, var(--color-surface)); border: 1.5px solid #f2c94c; }
+html[data-theme="dark"] .podium-1 { background: linear-gradient(180deg, #3a2f0c, var(--color-surface)); }
+.podium-1 .rank-badge { background: #f2b400; }
+.podium-2 { order: 1; background: var(--color-surface); border: 1.5px solid #c0c6d6; margin-top: 18px; }
+.podium-2 .rank-badge { background: #9aa2bd; }
+.podium-3 { order: 3; background: var(--color-surface); border: 1.5px solid #d9a06b; margin-top: 28px; }
+.podium-3 .rank-badge { background: #c17a3f; }
+.podium-name { font-weight: 700; font-size: 0.98rem; word-break: break-word; }
+.podium-score { font-size: 1.3rem; font-weight: 800; color: var(--color-primary); margin-top: 4px; }
+.podium-meta { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
+
+@media (max-width: 640px) {
+  .podium { grid-template-columns: 1fr; }
+  .podium-1, .podium-2, .podium-3 { order: initial; margin-top: 0; }
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 900px) { .charts-grid { grid-template-columns: 1.3fr 1fr; } }
+.chart-card { padding: 18px; }
+.chart-card canvas { max-width: 100%; }
+
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+table.leaderboard {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 520px;
+  font-size: 0.92rem;
+}
+table.leaderboard thead th {
+  background: var(--color-surface-alt);
+  text-align: left;
+  padding: 12px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+table.leaderboard thead th i { margin-left: 4px; opacity: 0.5; font-size: 0.75em; }
+table.leaderboard tbody td {
+  padding: 11px 14px;
+  border-top: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+table.leaderboard tbody tr:hover { background: var(--color-surface-alt); }
+.rank-cell { font-weight: 800; }
+.rank-1 { color: #f2b400; }
+.rank-2 { color: #9aa2bd; }
+.rank-3 { color: #c17a3f; }
+
+.qstat-list { display: flex; flex-direction: column; gap: 12px; }
+.qstat-row { padding: 14px 16px; }
+.qstat-row .qtext { font-weight: 600; margin-bottom: 8px; line-height: 1.4; }
+.qstat-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-danger-soft);
+  overflow: hidden;
+  display: flex;
+}
+.qstat-bar .fill-correct { background: var(--color-success); height: 100%; }
+.qstat-legend { display: flex; justify-content: space-between; font-size: 0.78rem; color: var(--color-text-muted); margin-top: 6px; }
+"""
+
+_ANALYSIS_JS_TEMPLATE = """
+(function () {
+  var DATA = %%DATA%%;
+
+  function sortTable(key, numeric) {
+    var tbody = document.getElementById('leaderboardBody');
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+    var dir = tbody.getAttribute('data-sort-key') === key && tbody.getAttribute('data-sort-dir') === 'asc' ? 'desc' : 'asc';
+    rows.sort(function (a, b) {
+      var av = a.getAttribute('data-' + key);
+      var bv = b.getAttribute('data-' + key);
+      if (numeric) { av = parseFloat(av); bv = parseFloat(bv); }
+      if (av < bv) return dir === 'asc' ? -1 : 1;
+      if (av > bv) return dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+    tbody.setAttribute('data-sort-key', key);
+    tbody.setAttribute('data-sort-dir', dir);
+  }
+
+  window.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('th[data-sort]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        sortTable(th.getAttribute('data-sort'), th.getAttribute('data-numeric') === '1');
+      });
+    });
+
+    if (window.Chart && DATA.scoreLabels && DATA.scoreLabels.length) {
+      var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      var gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(15,23,42,0.06)';
+      var textColor = isDark ? '#c8cde3' : '#5b6478';
+
+      var barCtx = document.getElementById('scoreChart');
+      if (barCtx) {
+        new Chart(barCtx, {
+          type: 'bar',
+          data: {
+            labels: DATA.scoreLabels,
+            datasets: [{
+              label: 'Score',
+              data: DATA.scoreValues,
+              backgroundColor: '#4f46e5',
+              borderRadius: 6,
+              maxBarThickness: 40
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: textColor }, grid: { display: false } },
+              y: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true }
+            }
+          }
+        });
+      }
+
+      var pieCtx = document.getElementById('passFailChart');
+      if (pieCtx && DATA.passFail) {
+        new Chart(pieCtx, {
+          type: 'doughnut',
+          data: {
+            labels: ['Passed', 'Not cleared'],
+            datasets: [{
+              data: [DATA.passFail.pass, DATA.passFail.fail],
+              backgroundColor: ['#16a34a', '#dc2626'],
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom', labels: { color: textColor } } }
+          }
+        });
+      }
     }
+  });
+})();
+"""
 
-    doc = TEMPLATE.replace("<title>erfrfer</title>", f"<title>{_esc(quiz_name)}</title>")
-    doc = doc.replace("<h2>erfrfer</h2>", f"<h2>{_esc(quiz_name)}</h2>")
-    doc = doc.replace('title="erfrfer"', f'title="{_esc(quiz_name)}"')
-    doc = doc.replace('<span class="quiz-title-text" title="erfrfer">erfrfer</span>', f'<span class="quiz-title-text" title="{_esc(quiz_name)}">{_esc(quiz_name)}</span>')
 
-    doc = re.sub(r'const qd\s*=\s*\{.*?\};', f'const qd={json.dumps(qd_data, ensure_ascii=False)};', doc, flags=re.DOTALL)
+def _ordinal_rank_badge(rank: int) -> str:
+    icons = {1: "fa-crown", 2: "fa-medal", 3: "fa-medal"}
+    return f'<i class="fa-solid {icons.get(rank, "fa-star")}"></i>'
 
-    filename = f"{qid}_report.html"
-    return doc.encode("utf-8"), filename
 
-render_quiz_html = generate_quiz_report_html
-render_analysis_html = generate_quiz_report_html
+def _compute_question_stats(
+    quiz: dict, results: list[dict]
+) -> list[dict[str, Any]]:
+    """Return per-question correctness stats. Prefers an explicit
+    ``question_stats`` list on the quiz dict (each item optionally carrying
+    ``correct_count``/``wrong_count``); otherwise derives a reasonable
+    placeholder distribution from the overall pass rate so the report still
+    renders something meaningful when per-user answer logs aren't wired up
+    yet."""
+    questions = quiz.get("questions") or []
+    explicit = quiz.get("question_stats")
+    n_results = max(len(results), 1)
+
+    stats = []
+    for i, question in enumerate(questions):
+        q_text = question.get("question", f"Question {i + 1}")
+        if explicit and i < len(explicit):
+            src = explicit[i]
+            correct = int(src.get("correct_count", 0) or 0)
+            wrong = int(src.get("wrong_count", 0) or 0)
+        else:
+            # Placeholder: approximate using the average pass rate across
+            # all participants when no per-question log is supplied.
+            avg_pct = (
+                sum(
+                    (r.get("score", 0) / r.get("total_questions", 1))
+                    for r in results
+                    if r.get("total_questions")
+                )
+                / n_results
+                if results
+                else 0.5
+            )
+            avg_pct = min(max(avg_pct, 0), 1)
+            correct = round(avg_pct * n_results)
+            wrong = n_results - correct
+        total = max(correct + wrong, 1)
+        stats.append(
+            {
+                "text": q_text,
+                "correct": correct,
+                "wrong": wrong,
+                "correct_pct": round((correct / total) * 100),
+            }
+        )
+    return stats
+
+
+async def render_analysis_html(quiz: dict, results: list[dict]) -> tuple[bytes, str]:
+    """Build a self-contained leaderboard/analysis report HTML page.
+
+    See module docstring for the expected shape of ``quiz`` and ``results``.
+    """
+    quiz_name = quiz.get("quiz_name") or "Untitled Quiz"
+    qid = quiz.get("qid") or str(uuid.uuid4())[:8]
+    questions = quiz.get("questions") or []
+    n_questions = len(questions) or 1
+    pass_percent = float(quiz.get("pass_percent", 40) or 40)
+
+    # Sort participants by score desc, then by time_taken asc (faster wins ties).
+    ranked = sorted(
+        results,
+        key=lambda r: (-float(r.get("score", 0)), float(r.get("time_taken", 0))),
+    )
+
+    n_participants = len(ranked)
+    avg_score = (
+        sum(float(r.get("score", 0)) for r in ranked) / n_participants
+        if n_participants
+        else 0.0
+    )
+    pass_count = sum(
+        1
+        for r in ranked
+        if r.get("total_questions")
+        and (float(r.get("score", 0)) / float(r["total_questions"])) * 100
+        >= pass_percent
+    )
+    fail_count = n_participants - pass_count
+
+    # ---- Podium (top 3) ----
+    podium_slots = ["", "", ""]
+    for i in range(min(3, n_participants)):
+        r = ranked[i]
+        name = _esc(r.get("user_name", "Anonymous"))
+        score = _esc(r.get("score", 0))
+        total_q = _esc(r.get("total_questions", n_questions))
+        rank = i + 1
+        podium_slots[i] = f"""
+    <div class="card podium-slot podium-{rank}">
+      <div class="rank-badge">{_ordinal_rank_badge(rank)}</div>
+      <div class="podium-name">{name}</div>
+      <div class="podium-score">{score} pts</div>
+      <div class="podium-meta">{total_q} questions</div>
+    </div>
+"""
+    podium_html = (
+        f'<div class="podium">{"".join(podium_slots)}</div>'
+        if n_participants
+        else '<p style="color:var(--color-text-muted);">No participants yet.</p>'
+    )
+
+    # ---- Leaderboard table ----
+    rows_html = []
+    for i, r in enumerate(ranked):
+        rank = i + 1
+        name = _esc(r.get("user_name", "Anonymous"))
+        score = float(r.get("score", 0))
+        total_q = int(r.get("total_questions", n_questions) or n_questions)
+        time_taken = int(r.get("time_taken", 0) or 0)
+        pct = (score / total_q * 100) if total_q else 0.0
+        passed = pct >= pass_percent
+        rank_cls = f"rank-{rank}" if rank <= 3 else ""
+        status_badge = (
+            '<span class="badge badge-success">Passed</span>'
+            if passed
+            else '<span class="badge badge-danger">Not cleared</span>'
+        )
+        mins, secs = divmod(time_taken, 60)
+        rows_html.append(
+            f"""<tr data-rank="{rank}" data-name="{name}" data-score="{score}"
+                 data-percent="{pct:.2f}" data-time="{time_taken}">
+        <td class="rank-cell {rank_cls}">#{rank}</td>
+        <td>{name}</td>
+        <td>{score:g} / {total_q}</td>
+        <td>{pct:.1f}%</td>
+        <td>{mins}m {secs}s</td>
+        <td>{status_badge}</td>
+      </tr>"""
+        )
+    table_body = "\n".join(rows_html) or (
+        '<tr><td colspan="6" style="text-align:center;color:var(--color-text-muted);'
+        'padding:20px;">No results submitted yet.</td></tr>'
+    )
+
+    # ---- Question-level correctness breakdown ----
+    q_stats = _compute_question_stats(quiz, ranked)
+    qstat_rows = []
+    for i, stat in enumerate(q_stats):
+        qstat_rows.append(
+            f"""
+      <div class="card qstat-row">
+        <div class="qtext">Q{i + 1}. {_esc(stat['text'])}</div>
+        <div class="qstat-bar">
+          <div class="fill-correct" style="width:{stat['correct_pct']}%"></div>
+        </div>
+        <div class="qstat-legend">
+          <span>{stat['correct']} correct</span>
+          <span>{stat['correct_pct']}% accuracy</span>
+          <span>{stat['wrong']} wrong</span>
+        </div>
+      </div>"""
+        )
+    qstat_html = "".join(qstat_rows) or (
+        '<p style="color:var(--color-text-muted);">No question data available.</p>'
+    )
+
+    # ---- Chart data payload ----
+    top_n = ranked[:15]
+    chart_payload = {
+        "scoreLabels": [r.get("user_name", "Anonymous") for r in top_n],
+        "scoreValues": [float(r.get("score", 0)) for r in top_n],
+        "passFail": {"pass": pass_count, "fail": fail_count},
+    }
+    chart_json = _js_literal(chart_payload)
+
+    hero_html = f"""
+<div class="container">
+  <div class="card hero">
+    <h1><i class="fa-solid fa-chart-line"></i> {_esc(quiz_name)} &mdash; Results Analysis</h1>
+    <p>Quiz ID: {_esc(qid)} &middot; {n_participants} participant(s) &middot; average score {avg_score:.1f}</p>
+    <div class="stat-grid" style="margin-top:22px;">
+      <div class="stat-tile">
+        <div class="value" style="color:var(--color-primary);">{n_participants}</div>
+        <div class="label">Participants</div>
+      </div>
+      <div class="stat-tile">
+        <div class="value" style="color:var(--color-success);">{pass_count}</div>
+        <div class="label">Passed</div>
+      </div>
+      <div class="stat-tile">
+        <div class="value" style="color:var(--color-danger);">{fail_count}</div>
+        <div class="label">Not cleared</div>
+      </div>
+      <div class="stat-tile">
+        <div class="value">{avg_score:.1f}</div>
+        <div class="label">Average score</div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+    podium_section = f"""
+<div class="container section">
+  <div class="section-title"><i class="fa-solid fa-trophy"></i> Top performers</div>
+  {podium_html}
+</div>
+"""
+
+    charts_section = f"""
+<div class="container section">
+  <div class="section-title"><i class="fa-solid fa-chart-column"></i> Score overview</div>
+  <div class="charts-grid">
+    <div class="card chart-card">
+      <canvas id="scoreChart" height="240"></canvas>
+    </div>
+    <div class="card chart-card">
+      <canvas id="passFailChart" height="240"></canvas>
+    </div>
+  </div>
+</div>
+"""
+
+    table_section = f"""
+<div class="container section">
+  <div class="section-title"><i class="fa-solid fa-ranking-star"></i> Full leaderboard</div>
+  <div class="card table-wrap">
+    <table class="leaderboard">
+      <thead>
+        <tr>
+          <th data-sort="rank" data-numeric="1">Rank <i class="fa-solid fa-sort"></i></th>
+          <th data-sort="name" data-numeric="0">Participant <i class="fa-solid fa-sort"></i></th>
+          <th data-sort="score" data-numeric="1">Score <i class="fa-solid fa-sort"></i></th>
+          <th data-sort="percent" data-numeric="1">Accuracy <i class="fa-solid fa-sort"></i></th>
+          <th data-sort="time" data-numeric="1">Time taken <i class="fa-solid fa-sort"></i></th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboardBody">
+        {table_body}
+      </tbody>
+    </table>
+  </div>
+</div>
+"""
+
+    qstats_section = f"""
+<div class="container section">
+  <div class="section-title"><i class="fa-solid fa-magnifying-glass-chart"></i> Question-wise breakdown</div>
+  <div class="qstat-list">
+    {qstat_html}
+  </div>
+</div>
+"""
+
+    body = (
+        _topbar_html(quiz_name, "Results & Analysis")
+        + hero_html
+        + podium_section
+        + charts_section
+        + table_section
+        + qstats_section
+        + '<footer class="site-footer">Generated analysis report &middot; interactive single-file HTML</footer>'
+    )
+
+    analysis_js = _ANALYSIS_JS_TEMPLATE.replace("%%DATA%%", chart_json)
+    html_doc = _page_shell(
+        title=f"{quiz_name} - Analysis",
+        extra_head=_ANALYSIS_CSS,
+        body=body,
+        extra_scripts=_CHARTJS_SCRIPT + f"<script>{analysis_js}</script>",
+    )
+
+    filename = f"{_slug(quiz_name)}-{qid}-analysis.html"
+    return html_doc.encode("utf-8"), filename
