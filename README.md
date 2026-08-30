@@ -1,265 +1,130 @@
-<div align="center">
+# 🎯 Advanced Telegram Quiz Bot
 
-# 🎯 Quizbot
+> **Developed by ABHISHEK PRAJAPAT with all love ❤️**
 
-**A production-grade Telegram quiz platform — create, manage, and run interactive quizzes at scale.**
-
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Pyrogram](https://img.shields.io/badge/Pyrogram-2.0-009485?logo=telegram)](https://pyrogram.org)
-[![PTB](https://img.shields.io/badge/python--telegram--bot-22.8-0088CC?logo=telegram)](https://python-telegram-bot.org)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-47A248?logo=mongodb)](https://mongodb.com)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://docker.com)
+Welcome to the most advanced, feature-rich Telegram Quiz Bot! This bot allows you to create, manage, and play interactive quizzes seamlessly within Telegram. It comes packed with a Dual-Bot architecture (Creator & Runner), Mini Web App support, AI capabilities, and much more!
 
 ---
 
-**Originally developed by [devgagan](https://github.com/devgaganin) &nbsp;•&nbsp; Sponsored by [Qzio](https://qzio.in)**
+## 🌟 Features of the Bot
+
+- **Dual-Bot Architecture:** Segregated processes for creating quizzes and playing quizzes to ensure maximum stability.
+- **Interactive Quizzes:** Play quizzes in groups, channels, or private messages.
+- **Mini Web App Support:** Play quizzes directly inside Telegram's modern Web App interface.
+- **AI Quiz Generation:** Generate quizzes automatically using AI integration.
+- **Polls & Leaderboards:** Real-time polling and dynamic leaderboards for competitive group quizzes.
+- **Broadcast & Admin Tools:** Global broadcast capabilities, user banning, and deep statistics for bot admins.
+- **Multiple Supported Formats:** Import quizzes from files or create them manually using the step-by-step wizard.
+- **Payment & Subscription Gates:** Monetize your quizzes or gate them behind channel subscriptions.
 
 ---
 
-### 🤖 Try the Live Bot → [@advance_quiz_bot](https://t.me/advance_quiz_bot)
+## 🛠️ Step 1: Getting Your Environment Variables
 
-</div>
+Before deploying the bot, you need to gather specific secret keys (Environment Variables). Save these somewhere safe (like a Notepad file) as you will need them during deployment.
 
----
+### 1. `API_ID` & `API_HASH`
+These are your core Telegram App credentials.
+- **Step 1:** Go to [my.telegram.org](https://my.telegram.org) and log in with your Telegram phone number.
+- **Step 2:** Click on **"API development tools"**.
+- **Step 3:** Fill in a random App Name and Short Name (e.g., "MyQuizBot").
+- **Step 4:** Click **"Create application"**.
+- **Step 5:** You will now see your **App api_id** (This is your `API_ID`) and **App api_hash** (This is your `API_HASH`). Copy both!
 
-## 📋 Table of Contents
+### 2. `CREATOR_BOT_TOKEN` & `RUNNER_BOT_TOKEN`
+You need to create two separate bots on Telegram to avoid conflicts.
+- **Step 1:** Open Telegram and search for **@BotFather**.
+- **Step 2:** Send the command `/newbot`.
+- **Step 3:** Give it a name (e.g., "Quiz Creator") and a username ending in bot (e.g., `MyQuizCreator_bot`).
+- **Step 4:** BotFather will give you a **HTTP API Token**. Copy this! This is your `CREATOR_BOT_TOKEN`.
+- **Step 5:** Repeat Steps 2 to 4 to create a second bot (e.g., "Quiz Runner"). The token for this second bot is your `RUNNER_BOT_TOKEN`.
+*(Note: Using the same token for both will cause the bot to crash and conflict constantly!)*
 
-- [Features](#-features)
-- [Architecture](#-architecture)
-- [Prerequisites](#-prerequisites)
-- [Quick Start](#-quick-start)
-- [Configuration Reference](#-configuration-reference)
-- [Running the Platform](#-running-the-platform)
-  - [Run Everything](#run-everything)
-  - [Run One Component Only](#run-one-component-only)
-  - [systemd (VPS, always-on)](#systemd-vps-always-on)
-- [Docker Deployment](#-docker-deployment)
-- [Mini App — the Visual Quiz Player](#-mini-app--the-visual-quiz-player)
-- [Database](#-database)
-- [Credits](#-credits)
+### 3. `MONGODB_URI`
+This is your database where all quizzes and scores are saved permanently.
+- **Step 1:** Go to [mongodb.com](https://www.mongodb.com/) and create a free account.
+- **Step 2:** Click **"Build a Database"** and select the **FREE (M0)** tier.
+- **Step 3:** Choose a cloud provider (AWS/Google) and region near you. Click **"Create"**.
+- **Step 4:** Set up a Database User by typing a Username and a Password. **Save this password!**
+- **Step 5:** Under "Network Access", allow access from anywhere (IP Address: `0.0.0.0/0`).
+- **Step 6:** Go to your Database dashboard, click **"Connect"** -> **"Drivers"** (Python).
+- **Step 7:** Copy the connection string provided. It will look like this:
+  `mongodb+srv://<username>:<password>@cluster0.mongodb.net/?retryWrites=true&w=majority`
+- **Step 8:** Replace `<password>` in the string with the password you created in Step 4. This complete string is your `MONGODB_URI`.
 
----
-
-## ✨ Features
-
-| Category | Capability |
-|---|---|
-| **Quiz Creation** | Text input, forwarded Telegram quiz polls, file/PDF import, AI-generated quizzes |
-| **Quiz Formats** | Standard, sectional (per-section timers), practice & exam modes |
-| **Smart Filtering** | Strips `[1/100]`-style progress tags, usernames, links, and custom word lists from imported polls |
-| **Editing** | Shuffle questions, retitle, adjust timers, add/remove questions |
-| **Access Control** | Free and paid quiz tiers, batch access, auth-chat lists, optional premium gate |
-| **Analytics** | Per-user performance, leaderboards, sectional score breakdowns |
-| **HTML Reports** | Self-contained interactive HTML scorecards — question navigator, KaTeX/Markdown rendering, dark/light theme |
-| **Mini App** | Visual in-Telegram quiz player (practice + exam mode) as a Telegram WebApp |
-| **Inline Sharing** | Share any quiz by ID via inline query, with a working Play button |
-| **Payments** | Razorpay-backed premium plans |
-| **Broadcast** | Send announcements to all users (owner only) |
-
----
-
-## 🏗 Architecture
-
-```
-quizbot/
-├── database/            Shared async MongoDB layer
-│   ├── db.py             Motor connection manager + automatic index setup
-│   └── repositories.py   One repository class per domain (users, quizzes, payments, ...)
-│
-├── shared/               Code shared by both bots
-│   ├── config.py          All configuration & secrets, loaded from .env
-│   ├── utils/             Text cleanup, premium checks, async file I/O
-│   └── html/              Quiz-report HTML generator (exam UI + analysis)
-│
-├── creator_bot/          Pyrogram bot — quiz creation, editing, batches, payments
-│   ├── bot.py             Client setup + run_creator_bot()
-│   └── handlers/          One module per feature area
-│
-├── runner_bot/           python-telegram-bot bot — playing quizzes, AI generation
-│   ├── bot.py             Application setup + run_runner_bot()
-│   └── handlers/          One module per feature area
-│
-└── mini_app/             FastAPI Mini App — the visual "Play" quiz player
-    ├── telegram_auth.py   Verifies Telegram WebApp initData (HMAC-SHA256)
-    ├── player_service.py  Play-session state, scoring, DB persistence
-    ├── routes.py          FastAPI app + /api/* endpoints
-    └── static/index.html  Single-file frontend (practice + exam mode UI)
-
-run.py                  Combined launcher — starts both bots (+ Mini App, if configured)
-requirements.txt
-Procfile                 Heroku process declaration (single web dyno)
-Dockerfile / docker-compose.yml
-.env.example             Environment variable template
-```
-
-Everything runs from **one process** (`run.py`) by default, sharing a single async MongoDB database:
-
-- **Creator Bot** (Pyrogram) handles quiz creation, editing, imports, batches, and payments.
-- **Runner Bot** (python-telegram-bot) handles quiz sessions — sending polls, tracking answers, building leaderboards.
-- **Mini App** (FastAPI, optional) serves a visual in-Telegram quiz player when a public domain is configured.
+### 4. `OWNER_ID` & `LOG_GROUP`
+- **Step 1:** Open Telegram and search for the bot **@MissRose_bot** (or any ID bot).
+- **Step 2:** Send `/id` to the bot. It will reply with your User ID (a long number). This is your `OWNER_ID`.
+- **Step 3:** Create a new Private Telegram Group for logs. Add your Creator bot and Runner bot to this group.
+- **Step 4:** Send `/id` in this group. Copy the Group ID (it usually starts with a minus sign `-`). This is your `LOG_GROUP`.
 
 ---
 
-## 🔧 Prerequisites
+## 🚀 Step 2: How to Deploy on Render (Step-by-Step)
 
-| Requirement | Minimum Version | Notes |
-|---|---|---|
-| Python | 3.11+ | |
-| MongoDB | Atlas free tier (M0) or self-hosted | `MONGODB_URI` in `.env` |
-| Telegram API credentials | — | From [my.telegram.org](https://my.telegram.org) |
-| Two Telegram bot tokens | — | same token for both runner and creator u can keep seperate too|
+Render provides a completely free platform to host your bot 24/7.
 
----
-
-## ⚡ Quick Start
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env
-nano .env          # fill in your values — see Configuration Reference below
-
-python run.py
-```
-
-The database and all its indexes are created automatically on first connect — no manual schema step needed.
-
----
-
-## ⚙️ Configuration Reference
-
-All values live in `.env` (copy from [`.env.example`](.env.example)).
-
-| Variable | Required | Description |
-|---|---|---|
-| `API_ID` / `API_HASH` | ✅ | Telegram API credentials from [my.telegram.org](https://my.telegram.org) |
-| `CREATOR_BOT_TOKEN` | ✅ | Token for the Pyrogram bot (creation, editing, payments) |
-| `RUNNER_BOT_TOKEN` | ✅ | Token for the PTB bot (playing, scheduling, AI generation) |
-| `MONGODB_URI` | ✅ | MongoDB Atlas connection string |
-| `MONGODB_DB_NAME` | ✅ | Database name (default: `quizbot`) |
-| `OWNER_ID` | ✅ | Your Telegram user ID |
-| `ADMIN_IDS` | ➖ | Space-separated additional admin user IDs |
-| `LOG_GROUP` | ➖ | Negative chat ID for error/log channel |
-| `BOT_GROUP` | ➖ | Main community group ID |
-| `CHANNEL_ID` | ➖ | Announcement channel ID |
-| `REQUIRED_SUB_CHANNEL` | ➖ | Channel users must join to use `/start`, `/create`, `/myquizzes`, `/add` |
-| `FREE_BOT` | ➖ | `true` to treat every user as premium |
-| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | ➖ | Leave blank to disable the `/pay` premium-purchase flow |
-| `PDF_API_BASE` | ➖ | Optional external PDF-generation microservice for `/testseries` |
-| `MINI_APP_DOMAIN` | ➖ | Public HTTPS URL for the Mini App — leave blank to disable it entirely |
-| `MINI_APP_HOST` / `MINI_APP_PORT` | ➖ | Local bind address behind your reverse proxy (default `0.0.0.0:8080`) |
-| `OPENROUTER_DEFAULT_KEYS` | ➖ | Comma-separated fallback AI provider keys |
-
-Rate limits, session timeouts, and other tuning knobs have sensible defaults — see the comments in `.env.example` for the full list.
+1. **Create a Render Account:** Go to [render.com](https://render.com/) and sign up using your GitHub account.
+2. **Connect Repository:** 
+   - Click the **"New +"** button at the top right and select **"Web Service"**.
+   - Click **"Build and deploy from a Git repository"**.
+   - Connect your GitHub account and select your Quiz Bot repository from the list.
+3. **Configure the Web Service:**
+   - **Name:** Type a name for your app (e.g., `my-super-quiz-bot`).
+   - **Region:** Select any region (e.g., Frankfurt or Oregon).
+   - **Branch:** `main`
+   - **Runtime:** `Python 3`
+   - **Build Command:** Delete whatever is there and type exactly: `pip install -r requirements.txt`
+   - **Start Command:** Delete whatever is there and type exactly: `python run.py`
+   - **Instance Type:** Select the **Free** option (512 MB RAM).
+4. **Add Environment Variables:**
+   - Scroll down and click on **"Advanced"**, then click **"Add Environment Variable"**.
+   - You need to add all the secret keys you gathered in Step 1. Click "Add Environment Variable" for each one:
+     - Key: `API_ID` | Value: *(Your API ID)*
+     - Key: `API_HASH` | Value: *(Your API Hash)*
+     - Key: `CREATOR_BOT_TOKEN` | Value: *(Your Creator Bot Token)*
+     - Key: `RUNNER_BOT_TOKEN` | Value: *(Your Runner Bot Token)*
+     - Key: `MONGODB_URI` | Value: *(Your MongoDB String)*
+     - Key: `OWNER_ID` | Value: *(Your User ID)*
+     - Key: `LOG_GROUP` | Value: *(Your Log Group ID)*
+5. **Deploy!**
+   - Scroll to the very bottom and click the big green **"Create Web Service"** button.
+   - Wait for 3 to 5 minutes. You will see logs scrolling. Once you see "Your service is live 🎉", your bot is successfully running!
 
 ---
 
-## 🚀 Running the Platform
+## ⏰ Step 3: Keep the Bot Awake 24/7 using Cron-job.org
 
-### Run Everything
+Render's free tier automatically puts your bot to "sleep" if it doesn't receive any web traffic for 15 minutes. This means if you close Telegram, the bot shuts down. To fix this, we will use a free service to "ping" the bot every 5 minutes.
 
-```bash
-python run.py
-```
+### Finding Your Web URL
+1. Go to your Render dashboard where your bot is deployed.
+2. Look at the very top, right under your bot's name. You will see a link that looks like `https://my-super-quiz-bot.onrender.com`.
+3. Copy this link.
 
-Starts both bots, and the Mini App server too if `MINI_APP_DOMAIN` is set.
+### Setting up Cron-job.org
+1. **Sign Up:** Go to [cron-job.org](https://cron-job.org/) and create a free account.
+2. **Create a Job:** Once logged in, click on **"Cronjobs"** in the left menu, then click the **"CREATE CRONJOB"** button.
+3. **Fill in the Details:**
+   - **Title:** Type `Quiz Bot Keep-Alive` (or anything you like).
+   - **URL:** Paste the link you copied from Render, and add `/healthz` at the very end of it.
+     - *Example:* `https://my-super-quiz-bot.onrender.com/healthz`
+   - **Enable job:** Make sure this toggle is **ON** (Orange).
+   - **Save responses in job history:** Leave this **OFF** (Grey).
+4. **Execution Schedule:**
+   - Select **"Every 5 minutes"** from the drop-down menu. (Do not set it lower than 5 minutes to avoid spamming the free server).
+5. **Schedule Expires:** 
+   - Leave the toggle **OFF** (Grey). You want this job to run forever.
+6. **Notify me when... (Notification Settings):**
+   - To avoid getting spammed with useless emails whenever the server restarts, configure these toggles:
+   - *execution of the cronjob fails* -> **OFF** (Grey)
+   - *execution of the cronjob succeeds after it failed before* -> **OFF** (Grey)
+   - *the cronjob will be disabled because of too many failures* -> **ON** (Orange)
+   - *the server TLS certificate is about to expire* -> **OFF** (Grey)
+7. **Finalize:**
+   - Click the orange **"CREATE"** button at the bottom right of the page.
 
-### Run One Component Only
-
-```bash
-python run.py --only creator   # Creator Bot only
-python run.py --only runner    # Runner Bot only
-python run.py --only miniapp   # Mini App server only
-```
-
-### systemd (VPS, always-on)
-
-```bash
-sudo nano /etc/systemd/system/quizbot.service
-```
-
-```ini
-[Unit]
-Description=Quizbot Platform
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/opt/quizbot
-ExecStart=/opt/quizbot/.venv/bin/python run.py
-Restart=always
-RestartSec=10
-EnvironmentFile=/opt/quizbot/.env
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now quizbot
-sudo journalctl -u quizbot -f      # live logs
-```
+🎉 **Congratulations!** Your Quiz Bot is now fully deployed, configured, and will stay online 24/7 completely for free! 
 
 ---
-
-## 🐳 Docker Deployment
-
-```bash
-docker compose up -d --build
-```
-
-This starts the Creator Bot, Runner Bot, and (if `MINI_APP_DOMAIN` is set) the Mini App as separate containers, each connecting out to the same MongoDB Atlas cluster via `MONGODB_URI` — no local volume needed, since nothing is stored on the container's own filesystem.
-
-To skip the Mini App entirely:
-
-```bash
-docker compose up -d --build creator-bot runner-bot
-```
-
-**Heroku / other PaaS**: a single `Procfile` (`web: python run.py`) runs the whole platform from one dyno/process — set the same `.env` variables as Config Vars.
-
----
-
-## 📱 Mini App — the Visual Quiz Player
-
-A "Play" button (opened as a Telegram WebApp) appears after quiz creation and on inline-share cards, offering two modes:
-
-- **Practice mode** — instant correct/incorrect feedback with the explanation shown right after each answer, then auto-advance.
-- **Exam mode** — no answers revealed until the end, followed by a full top-to-bottom review of every question, your answer, the correct answer, and the explanation.
-
-It's strictly a player — no creation or editing happens here, and it enforces the same access rules as both bots (free/paid quizzes, batch access, auth-chat lists, optional premium gate).
-
-Telegram requires a public HTTPS URL for WebApp buttons, so put a reverse proxy or tunnel (nginx, Caddy, Cloudflare Tunnel, etc.) in front of the FastAPI server and set `MINI_APP_DOMAIN` accordingly. Leave it blank to disable the feature entirely — no Play buttons are shown, and the server doesn't start.
-
-Identity comes solely from Telegram's own `initData`, verified server-side via HMAC-SHA256 on every request. Quiz content in every API response is AES-256-GCM encrypted with a per-session key, and the correct answer is never present in a question's payload before it's answered.
-
----
-
-## 🗄 Database
-
-Data lives in MongoDB Atlas — a free M0 cluster is enough to get started (see [Quick Start](#-quick-start)). `quizbot/database/db.py` connects via Motor and creates every required index automatically on first connect, so there's no manual schema step. Both bots read and write through repository classes in `quizbot/database/repositories.py` — there's no separate API layer to keep in sync.
-
----
-
-## 🙏 Credits
-
-<div align="center">
-
-| Role | |
-|---|---|
-| **Originally developed by** | [devgagan](https://github.com/devgaganin) |
-| **Sponsored by** | [Qzio](https://qzio.in) — The Smart Quiz Platform |
-| **Telegram Libraries** | [Pyrogram](https://pyrogram.org) & [python-telegram-bot](https://python-telegram-bot.org) |
-| **Database** | [MongoDB Atlas](https://mongodb.com) |
-
----
-
-*Built for educators, exam aspirants, and quiz creators.*
-
-</div>
+*Created with ❤️ by ABHISHEK PRAJAPAT.*
