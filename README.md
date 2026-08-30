@@ -2,7 +2,7 @@
 
 > **Developed by ABHISHEK PRAJAPAT with all love ❤️**
 
-Welcome to the most advanced, feature-rich Telegram Quiz Bot! This bot allows you to create, manage, and play interactive quizzes seamlessly within Telegram. It comes packed with a Dual-Bot architecture (Creator & Runner), Mini Web App support, AI capabilities, and much more!
+Welcome to the most advanced, feature-rich Telegram Quiz Bot! This bot allows you to create, manage, and play interactive quizzes seamlessly within Telegram. It comes packed with a Dual-Bot architecture, Mini Web App support, AI capabilities, and much more!
 
 ---
 
@@ -19,113 +19,145 @@ Welcome to the most advanced, feature-rich Telegram Quiz Bot! This bot allows yo
 
 ---
 
-## 🛠️ Step 1: Getting ALL Your Environment Variables (Step-by-Step)
+## 📋 Final Environment Variables Master Checklist
 
-When deploying this bot, there are around 15 environment variables you can use. Some are mandatory (Required), and some are optional features. Save these somewhere safe before deploying!
+Yahan ek-ek Environment Variable (Secret Key) ka ultra-detailed checklist hai. Deployment ke waqt Render me aapko yahi values exact isi format me daalni hain.
 
-### 🔴 REQUIRED VARIABLES (Must Have)
+### 1️⃣ Telegram Core Credentials (Bot Identity)
 
-**1. `API_ID` & `API_HASH`**
-These are your core Telegram App credentials.
-- Go to [my.telegram.org](https://my.telegram.org) and log in.
-- Click on **"API development tools"**.
-- Fill in a random App Name and Short Name (e.g., "MyQuizBot").
-- Click **"Create application"**.
-- You will now see your **App api_id** (`API_ID`) and **App api_hash** (`API_HASH`). Copy both!
+#### 🔹 `API_ID`
+- **Value Format:** Numbers (Jaise: `12345678`)
+- **Detail:** Telegram application ka unique ID hai jo `my.telegram.org` se milta hai. Iske bina bot Telegram servers se communicate nahi kar sakta.
+- **Kaise Le Kar Aayein:**
+  1. Jao [my.telegram.org](https://my.telegram.org) par aur login karo.
+  2. "API development tools" par click karo.
+  3. App Name aur Short Name dalo aur "Create application" dabao.
+  4. Yahan aapko apna `api_id` mil jayega.
 
-**2. `CREATOR_BOT_TOKEN` & `RUNNER_BOT_TOKEN`**
-You need TWO bots from BotFather to avoid engine conflicts.
-- Search for **@BotFather** on Telegram and send `/newbot`.
-- Give it a name (e.g., "Quiz Creator") and get the HTTP API Token. This is your `CREATOR_BOT_TOKEN`.
-- Send `/newbot` again, create a second bot (e.g., "Quiz Runner"), and get its token. This is your `RUNNER_BOT_TOKEN`.
+#### 🔹 `API_HASH`
+- **Value Format:** Text string (Jaise: `a1b2c3d4e5f6g7h8i9j0...`)
+- **Detail:** Telegram application ki security key hai jo `my.telegram.org` se milti hai.
+- **Kaise Le Kar Aayein:** Upar wale same process se `api_id` ke theek niche `api_hash` milta hai.
 
-**3. `MONGODB_URI`**
-The database where all quizzes and scores are saved.
-- Go to [mongodb.com](https://www.mongodb.com/) and create a free account.
-- Click **"Build a Database"** -> select **FREE (M0)** tier -> Click **Create**.
-- Set up a Database User (Username & Password). **Save this password!**
-- Go to **Network Access** -> Add IP Address -> "Allow Access from Anywhere" (`0.0.0.0/0`).
-- Go to Database -> Connect -> Drivers (Python) -> Copy the connection string.
-- Replace `<password>` in the string with your password. The final string is your `MONGODB_URI`.
+#### 🔹 `CREATOR_BOT_TOKEN`
+- **Value Format:** `1234567890:ABCdefgh...`
+- **Detail:** `@BotFather` se mila aapka **Single Bot Token**. Ye Pyrogram engine ko Quiz Create karne, edit karne aur manage karne me help karta hai.
+- **Kaise Le Kar Aayein:**
+  1. Telegram me **@BotFather** search karo aur `/newbot` likho.
+  2. Bot ka naam aur username dalo.
+  3. BotFather aapko ek "HTTP API Token" dega. Yahi aapka Token hai.
 
-**4. `OWNER_ID`**
-Your personal Telegram account ID to give you Admin rights.
-- Search for **@MissRose_bot** (or any ID bot) on Telegram.
-- Send `/id` to the bot. It will reply with a long number. This is your `OWNER_ID`.
+#### 🔹 `RUNNER_BOT_TOKEN`
+- **Value Format:** `1234567890:ABCdefgh...`
+- **Detail:** Isme bhi **wahi same Single Bot Token** daalna hai. Ye Python-Telegram-Bot engine ko Groups me quiz chalane aur leaderboards dikhane me help karta hai.
 
 ---
 
-### 🟢 OPTIONAL & ADVANCED VARIABLES (Add these if you want extra features)
+### 2️⃣ Database & Ownership (Data Storage & Admin)
 
-**5. `ADMIN_IDS`**
-- If you have partners/admins who also need access, get their Telegram IDs (using `@MissRose_bot`) and put them here separated by commas. (e.g., `1234567,9876543`).
+#### 🔹 `MONGODB_URI`
+- **Value Format:** `mongodb+srv://username:password@cluster0.xxxx.mongodb.net/`
+- **Detail:** MongoDB Atlas database ka connection link hai. Isme aapke real username aur password bhare hone chahiye.
+- **Kaise Le Kar Aayein:**
+  1. [mongodb.com](https://www.mongodb.com/) par free account banao.
+  2. "Build a Database" -> FREE (M0) select karke Create karo.
+  3. Username aur Password banao (Password yaad rakhna).
+  4. Network Access me jao aur IP `0.0.0.0/0` (Allow Anywhere) add karo.
+  5. Connect -> Drivers (Python) me jao aur Connection String copy karo.
+  6. String me `<password>` ki jagah apna asli password dal do.
 
-**6. `LOG_GROUP`**
-- Create a private Telegram group for bot logs (alerts when quizzes finish, errors, etc.). Add your bots to this group. Send `/id` inside the group. Copy the group ID (starts with a `-`). Put this in `LOG_GROUP`.
+#### 🔹 `MONGODB_DB_NAME`
+- **Value Format:** `quizbot`
+- **Detail:** Aapke database ka naam. Isko bilkul `quizbot` hi likhna hai.
 
-**7. `BOT_GROUP` & `CHANNEL_ID`**
-- If you have an official Support Group or Updates Channel for your bot, put their IDs here (again, get them by forwarding a message to an ID bot or using `@MissRose_bot` in the group/channel).
+#### 🔹 `OWNER_ID`
+- **Value Format:** Numbers (Jaise: `12345678`)
+- **Detail:** Aapka personal numeric Telegram ID. Bot sirf aapko Owner manega aur admin commands (/stats, /broadcast) chalane dega.
+- **Kaise Le Kar Aayein:** Telegram par **@MissRose_bot** ko `/id` bhejo. Jo numbers reply me aayenge wo aapki Owner ID hai.
 
-**8. `REQUIRED_SUB_CHANNEL`**
-- To force users to join your channel before they can play quizzes (Force Sub/Subscribe Gate).
-- Put your channel's public username here WITH the `@` symbol (e.g., `@MyAwesomeChannel`). Ensure your bot is an Admin in this channel!
+---
 
-**9. `FREE_BOT`**
-- If you want EVERY user to have premium features automatically for free.
-- Set this to `True` (or `False` if you want to restrict features).
+### 3️⃣ Channel & Log Group (Management & Force Subscribe)
 
-**10. `RAZORPAY_KEY_ID` & `RAZORPAY_KEY_SECRET`**
-- If you want to sell Premium subscriptions inside the bot via Razorpay.
-- Go to the [Razorpay Dashboard](https://dashboard.razorpay.com/), go to Settings -> API Keys -> Generate Key.
-- You will get a Key ID (`RAZORPAY_KEY_ID`) and a Key Secret (`RAZORPAY_KEY_SECRET`).
+#### 🔹 `LOG_GROUP`
+- **Value Format:** Negative Number (Jaise: `-100123456789`)
+- **Detail:** Aapke us 1 Private Log Group ka ID. Jab bhi bot me koi activity ya error aayega, bot isme silently alerts bhejega.
+- **Kaise Le Kar Aayein:** Ek private group banao, apne bot aur Rose bot ko add karo, aur `/id` bhejo. Group ID humesha minus `-` se shuru hoti hai.
 
-**11. `PDF_API_BASE`**
-- If you purchased or host an external PDF generation API to prevent RAM crashes when users generate heavy PDFs. Paste the API URL here.
+#### 🔹 `CHANNEL_ID`
+- **Value Format:** Negative Number (Jaise: `-100987654321`)
+- **Detail:** Aapke 1 Official Channel ka numeric ID. Broadcast aur system posts ke liye.
+- **Kaise Le Kar Aayein:** Apne channel me koi message karein aur use Rose bot wale group me forward karke `/id` check karein (ya channel me Rose bot add karke `/id` bhej dein).
 
-**12. `MONGODB_DB_NAME`**
-- The name of your database collection. If you leave this blank, it defaults to `quizbot`. You can put `quizbot` here.
+#### 🔹 `REQUIRED_SUB_CHANNEL`
+- **Value Format:** Username with `@` (Jaise: `@myquizchannel`)
+- **Detail:** Aapke 1 Official Channel ka `@username`. Jab tak koi user is channel ko join nahi karega, bot use start/quiz-create nahi karne dega. Dhyan rahe bot channel me Admin hona chahiye!
+
+---
+
+### 4️⃣ Feature Flags & AI (Free Bot & AI Quiz Generator)
+
+#### 🔹 `FREE_BOT`
+- **Value Format:** `True`
+- **Detail:** Isko bilkul `True` likhna hai (T is capital). Isse aapka bot poori tarah sabhi users ke liye 100% Free chalega aur koi payment ki maang nahi karega.
+
+#### 🔹 `OPENROUTER_DEFAULT_KEYS`
+- **Value Format:** `sk-or-v1-xxxxxxxxxxxxxxxx`
+- **Detail:** OpenRouter.ai se mila aapka AI API Key. Isse bot me AI dwara automatic questions generate honge.
+- **Kaise Le Kar Aayein:** [openrouter.ai](https://openrouter.ai/) par account banao, Settings -> Keys me jao aur ek nayi key generate karke copy kar lo.
+
+---
+
+### 5️⃣ Mini App WebApp (Visual In-Telegram Quiz Player)
+
+#### 🔹 `MINI_APP_DOMAIN`
+- **Value Format:** `https://quizbot-app.onrender.com` *(Aapke Render app ka exact URL)*
+- **Detail:** Render par aapki service ka public URL. Isse Telegram me Play Quiz button work karega.
+- **Kaise Le Kar Aayein:** Jab aap Render par bot deploy karenge, to top left par aapko aapka URL dikhega, usko copy kar lein.
+
+#### 🔹 `MINI_APP_HOST`
+- **Value Format:** `0.0.0.0`
+- **Detail:** Render server ke internal network binding ke liye. Isko exact `0.0.0.0` hi likhna hai.
+
+#### 🔹 `MINI_APP_PORT`
+- **Value Format:** `8080`
+- **Detail:** Port number. Isko exact `8080` hi likhna hai.
+
+---
+
+### 🚫 KHALLI / BLANK Chhodne Wale Variables (Inko NAHI bharna):
+- **`BOT_GROUP`** -> Khali chhod dein (Hata diya hai)
+- **`RAZORPAY_KEY_ID`** -> Khali chhod dein (Bot free hai)
+- **`RAZORPAY_KEY_SECRET`** -> Khali chhod dein (Bot free hai)
+- **`ADMIN_IDS`** -> Khali chhod dein
 
 ---
 
 ## 🚀 Step 2: How to Deploy on Render (Step-by-Step)
 
-1. Go to [render.com](https://render.com/) and sign up.
-2. Click **"New +"** -> **"Web Service"** -> **"Build and deploy from a Git repository"**.
-3. Connect your GitHub account and select your Quiz Bot repository.
-4. **Configure the Service:**
-   - **Name:** Type a name (e.g., `abhishek-quiz-bot`).
-   - **Region:** Select any region.
+1. **Create Account:** Go to [render.com](https://render.com/) and sign up.
+2. **Connect Repo:** Click **"New +"** -> **"Web Service"** -> **"Build and deploy from a Git repository"** -> Connect your GitHub and select this repository.
+3. **Configure Settings:**
+   - **Name:** Your bot's name.
    - **Branch:** `main`
    - **Runtime:** `Python 3`
-   - **Build Command:** Delete whatever is there and type: `pip install -r requirements.txt`
-   - **Start Command:** Delete whatever is there and type: `python run.py`
-   - **Instance Type:** Select the **Free** option (512 MB).
-5. **Add Environment Variables:**
-   - Scroll down to **"Advanced"** -> **"Add Environment Variable"**.
-   - Now, click "Add Environment Variable" multiple times and type out ALL the keys and values you gathered from **Step 1** (Required ones are mandatory, Optional ones are up to you).
-6. **Deploy!**
-   - Click the green **"Create Web Service"** button. Wait 3-5 minutes until you see "Your service is live 🎉".
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `python run.py`
+   - **Instance Type:** **Free** (512 MB).
+4. **Environment Variables:** Scroll to **"Advanced"** -> **"Add Environment Variable"** and add all the variables from the checklist above.
+5. **Deploy:** Click **"Create Web Service"**.
 
 ---
 
 ## ⏰ Step 3: Keep the Bot Awake 24/7 (Cron-job.org)
 
-Render's free tier automatically puts your bot to "sleep" after 15 minutes of inactivity. To fix this:
-
-1. **Copy your Render URL:** On your Render dashboard, copy the link at the top (e.g., `https://abhishek-quiz-bot.onrender.com`).
-2. Go to [cron-job.org](https://cron-job.org/) and sign up for free.
+1. Copy your Render app URL (e.g., `https://quizbot-app.onrender.com`).
+2. Go to [cron-job.org](https://cron-job.org/) and create an account.
 3. Click **"Cronjobs"** -> **"CREATE CRONJOB"**.
-4. **Fill Settings:**
-   - **Title:** `Quiz Bot Ping`
-   - **URL:** Paste your Render link and add `/healthz` at the end (e.g., `https://abhishek-quiz-bot.onrender.com/healthz`).
-   - **Execution Schedule:** Select **Every 5 minutes**.
-   - **Schedule Expires:** Leave **OFF** (Grey).
-5. **Notify me when (Notifications):**
-   - *execution of the cronjob fails* -> **OFF** (Grey)
-   - *execution of the cronjob succeeds after it failed before* -> **OFF** (Grey)
-   - *the cronjob will be disabled because of too many failures* -> **ON** (Orange)
-   - *the server TLS certificate is about to expire* -> **OFF** (Grey)
-6. Click **"CREATE"**. Your bot is now 24/7 online for free!
+4. **URL:** Paste your Render URL and add `/healthz` at the end (`https://quizbot-app.onrender.com/healthz`).
+5. **Execution Schedule:** Select **Every 5 minutes**.
+6. **Notifications:** Turn **ON** only `"the cronjob will be disabled because of too many failures"`. Leave all others **OFF**.
+7. Click **"CREATE"**.
 
 ---
 *Created with ❤️ by ABHISHEK PRAJAPAT.*
